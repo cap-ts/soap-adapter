@@ -26,16 +26,6 @@ export = Orchestrator;
  * @property {string} parent.name - The explicit namespace identifier of the parent service.
  */
 /**
- * @typedef {Object} CdsRequest
- * @property {CdsEntity} target - Contextual meta-reflection model representing the current execution entity instance.
- * @property {*} [data] - The initial request data block payload originating from the user invocation.
- * @property {Object} [context] - Inbound metadata execution boundary lifecycle storage state.
- * @property {string} [context.id] - Upstream runtime trace identification context key mapping.
- * @property {Object} [user] - Context user passport metadata object.
- * @property {string} [user.id] - Plain text principal profile lookup account name.
- * @property {function(number, string): void} error - Framework hook to flag application exceptions and halt normal stack paths.
- */
-/**
  * @typedef {Object} SoapHeaderObject
  * @property {*} [value] - The core body value or sub-graph assigned inside the soap header layer block.
  * @property {string} [name] - Target namespace tag name descriptor applied to XML tracking.
@@ -44,10 +34,10 @@ export = Orchestrator;
  */
 /**
  * @typedef {Object} BaseAdapterInstance
- * @property {Object.<string, Array<function(*, CdsRequest): (Promise.<*>|*)>>} _requestHandlers - Registered request mutation callback stacks.
- * @property {Object.<string, function(*, CdsRequest): (Promise.<*>|*)>} _mockHandlers - Sandbox mock boundary intercept hooks.
- * @property {Object.<string, Array<(SoapHeaderObject|function(*, CdsRequest): (Promise.<SoapHeaderObject>|SoapHeaderObject))>>} _headerHandlers - Custom explicit security header factory injectors.
- * @property {Object.<string, Array<function(*, CdsRequest): (Promise.<Array.<Object>>|Array.<Object>)>>} _responseHandlers - Dynamic override translation format steps.
+ * @property {Object.<string, Array<function(*, cds.Request): (Promise.<*>|*)>>} _requestHandlers - Registered request mutation callback stacks.
+ * @property {Object.<string, function(*, cds.Request): (Promise.<*>|*)>} _mockHandlers - Sandbox mock boundary intercept hooks.
+ * @property {Object.<string, Array<(SoapHeaderObject|function(*, cds.Request): (Promise.<SoapHeaderObject>|SoapHeaderObject))>>} _headerHandlers - Custom explicit security header factory injectors.
+ * @property {Object.<string, Array<function(*, cds.Request): (Promise.<Array.<Object>>|Array.<Object>)>>} _responseHandlers - Dynamic override translation format steps.
  */
 /**
  * Orchestrates CAP-to-SOAP middleware pipelines by managing boot-time target file system validations,
@@ -83,14 +73,14 @@ declare class Orchestrator {
      * Executes the lifecycle pipeline tracking processing workflow loop for intercepted interface interactions.
      * Handles payload pre-processing, automatic XML root generation packaging, header injection, live network communication or mocking,
      * and recursive flattening conversions into mapping models.
-     * @param {CdsRequest} req - The incoming runtime context parameter bundle payload managed by the active application framework.
+     * @param {cds.Request} req - The incoming runtime context parameter bundle payload managed by the active application framework.
      * @returns {Promise<Array<Object>|void>} Resolves with a flat array mapping extracted data elements, or undefined if configuration conditions break early.
      * @async
      */
-    handleEvent(req: CdsRequest): Promise<Array<any> | void>;
+    handleEvent(req: cds.Request): Promise<Array<any> | void>;
 }
 declare namespace Orchestrator {
-    export { TraceContext, SoapBindingConfig, CdsEntityElement, CdsEntity, CdsRequest, SoapHeaderObject, BaseAdapterInstance };
+    export { TraceContext, SoapBindingConfig, CdsEntityElement, CdsEntity, SoapHeaderObject, BaseAdapterInstance };
 }
 type TraceContext = {
     /**
@@ -147,32 +137,6 @@ type CdsEntity = {
     };
     "": SoapBindingConfig;
 };
-type CdsRequest = {
-    /**
-     * - Contextual meta-reflection model representing the current execution entity instance.
-     */
-    target: CdsEntity;
-    /**
-     * - The initial request data block payload originating from the user invocation.
-     */
-    data?: any;
-    /**
-     * - Inbound metadata execution boundary lifecycle storage state.
-     */
-    context?: {
-        id?: string;
-    };
-    /**
-     * - Context user passport metadata object.
-     */
-    user?: {
-        id?: string;
-    };
-    /**
-     * - Framework hook to flag application exceptions and halt normal stack paths.
-     */
-    error: (arg0: number, arg1: string) => void;
-};
 type SoapHeaderObject = {
     /**
      * - The core body value or sub-graph assigned inside the soap header layer block.
@@ -196,25 +160,25 @@ type BaseAdapterInstance = {
      * - Registered request mutation callback stacks.
      */
     _requestHandlers: {
-        [x: string]: ((arg0: any, arg1: CdsRequest) => (Promise<any> | any))[];
+        [x: string]: ((arg0: any, arg1: cds.Request) => (Promise<any> | any))[];
     };
     /**
      * - Sandbox mock boundary intercept hooks.
      */
     _mockHandlers: {
-        [x: string]: (arg0: any, arg1: CdsRequest) => (Promise<any> | any);
+        [x: string]: (arg0: any, arg1: cds.Request) => (Promise<any> | any);
     };
     /**
      * - Custom explicit security header factory injectors.
      */
     _headerHandlers: {
-        [x: string]: (SoapHeaderObject | ((arg0: any, arg1: CdsRequest) => (Promise<SoapHeaderObject> | SoapHeaderObject)))[];
+        [x: string]: (SoapHeaderObject | ((arg0: any, arg1: cds.Request) => (Promise<SoapHeaderObject> | SoapHeaderObject)))[];
     };
     /**
      * - Dynamic override translation format steps.
      */
     _responseHandlers: {
-        [x: string]: ((arg0: any, arg1: CdsRequest) => (Promise<Array<any>> | Array<any>))[];
+        [x: string]: ((arg0: any, arg1: cds.Request) => (Promise<Array<any>> | Array<any>))[];
     };
 };
 //# sourceMappingURL=Orchestrator.d.ts.map
