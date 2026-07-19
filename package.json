@@ -1,6 +1,6 @@
 {
   "name": "@cap-ts/soap-adapter",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "SOAP Adapter for CAP",
   "main": "src/index.js",
   "types": "types/index.d.ts",
