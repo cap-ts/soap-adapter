@@ -1,0 +1,69 @@
+{
+  "name": "@cap-ts/soap-adapter",
+  "version": "1.8.16",
+  "description": "SOAP Adapter for CAP",
+  "main": "src/index.js",
+  "types": "types/index.d.ts",
+  "author": "SAP-Code-World",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cap-ts/soap-adapter.git"
+  },
+  "keywords": [
+    "SAP",
+    "CAP",
+    "SOAP",
+    "Adapter",
+    "Integration",
+    "CDS",
+    "BTP",
+    "Plugin"
+  ],
+  "dependencies": {
+    "@sap-cloud-sdk/connectivity": ">=4",
+    "@sap-cloud-sdk/http-client": ">=4",
+    "soap": ">=1"
+  },
+  "devDependencies": {
+    "cross-var": "^1.1.0",
+    "javascript-obfuscator": "^4.1.1",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.8.3",
+    "uglify-js": "^3.19.3"
+  },
+  "scripts": {
+    "compile:types": "tsc",
+    "compile:main": "node build/index.js",
+    "clean": "rimraf ./.types",
+    "pull": "git submodule update --init --recursive --remote",
+    "build": "npm run compile:main && npm run compile:types && npm run clean",
+    "config": "node build/index.js --config",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepublishOnly": "npm run pull",
+    "prepare": "npm run build",
+    "postpublish": "node build/postpublish.js",
+    "gitonly": "npm run prepublishOnly && npm run prepare && npm run postpublish",
+    "gitbuild": "npm run prepare && npm run postpublish",
+    "patch": "npm version patch",
+    "minor": "npm version minor",
+    "major": "npm version major",
+    "deploy": "npm publish --access public",
+    "deprecate": "node build/process.js --deprecate",
+    "unpublish": "node build/process.js --unpublish"
+  },
+  "files": [
+    "index.js",
+    "index.cds",
+    "src",
+    "types",
+    "src/lib/**/*"
+  ],
+  "cds": {
+    "file": "index.cds"
+  },
+  "bugs": {
+    "url": "https://github.com/cap-ts/soap-adapter/issues"
+  },
+  "homepage": "https://github.com/cap-ts/soap-adapter#readme"
+}

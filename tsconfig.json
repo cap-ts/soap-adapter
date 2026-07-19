@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "allowJs": true,
+        "declaration": true,
+        "declarationMap": true,
+        "emitDeclarationOnly": true,
+        "skipLibCheck": true,
+        "removeComments": false,
+        "maxNodeModuleJsDepth": 1,
+        "outDir": "types",
+        "rootDir": ".types",
+        "module": "CommonJS",
+        "target": "ESNext",
+        "moduleResolution": "node"
+    },
+    "include": [
+        ".types/**/*"
+    ]
+}
