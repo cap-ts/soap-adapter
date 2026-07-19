@@ -25,7 +25,11 @@
     "@sap-cloud-sdk/http-client": ">=4",
     "soap": ">=1"
   },
+  "peerDependencies": {
+    "@sap/cds": ">=7.0.0"
+  },
   "devDependencies": {
+    "@sap/cds": "^8.0.0",
     "fs-extra": "^11.3.0",
     "cross-var": "^1.1.0",
     "javascript-obfuscator": "^4.1.1",
