@@ -1,1 +1,1 @@
-require('./src/lib/plugin-loader')();
+require('./src/lib/_loader')();

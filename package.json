@@ -58,8 +58,8 @@
     "unpublish": "node build/process.js --unpublish"
   },
   "files": [
-    "index.js",
     "index.cds",
+    "cds-plugin.js",
     "src",
     "types",
     "src/lib/**/*"
