@@ -1,7 +1,7 @@
-import Orchestrator = require("./lib/Orchestrator");
-import BaseService = require("./lib/Base");
+import { Orchestrator } from "./lib/orchestrator";
+import { Base } from "./lib/base";
 export namespace soap {
-    export { Orchestrator };
-    export { BaseService };
+    export { Orchestrator as OrchestratorService };
+    export { Base as BaseService };
 }
 //# sourceMappingURL=index.d.ts.map
