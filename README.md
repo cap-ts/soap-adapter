@@ -36,8 +36,8 @@ npm install @cap-ts/soap-adapter@latest
 }
 ```
 
-2. Tag your entities with `@soap.binding` and fields with `@soap.path` inside your `.cds` files.
-3. Drop a custom script named `<ServiceName>.js` inside your project's `srv/lib/` folder extending `soap.BaseService` to intercept request lifecycles.
+2. Tag your entities with `@soap.operation` and `@soap.rootResponse`, fields with `@soap.path` inside your `.cds` files.
+3. Drop a custom script named `<ServiceName>.js` inside your project's `srv/lib/` folder extending `soap.ApplicationService` to intercept request lifecycles.
 
 ## 🛠️ Support & Feedback
 

@@ -5,3 +5,5 @@ out/
 .types/
 /out.js
 /index.js
+.DS_Store
+**/*/.DS_Store
