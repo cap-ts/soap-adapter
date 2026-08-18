@@ -63,7 +63,7 @@ declare class ApplicationService {
      * @throws {Error} If the provided handler is neither a functional execution block nor an object structure.
      * @returns {void}
      */
-    header(targets: string | any | Array<string | any>, handler: SoapHeaderObject | ((req: cds.Request, data?: any) => Promise<SoapHeaderObject> | SoapHeaderObject)): void;
+    header(targets: string | Object | Array<string | Object>, handler: SoapHeaderObject | ((req: cds.Request, data?: any) => Promise<SoapHeaderObject> | SoapHeaderObject)): void;
     /**
      * @callback SoapRequestEvaluator
      * @param {cds.Request} req - The incoming CAP request context.
@@ -77,7 +77,7 @@ declare class ApplicationService {
      * @throws {Error} If the handler input fails functional type evaluation checks.
      * @returns {void}
      */
-    request(targets: string | any | Array<string | any>, handler: (req: cds.Request, data?: any) => Promise<any> | any): void;
+    request(targets: string | Object | Array<string | Object>, handler: (req: cds.Request, data?: any) => Promise<any> | any): void;
     /**
      * @callback SoapMockEvaluator
      * @param {cds.Request} req - The incoming CAP request context.
@@ -91,7 +91,7 @@ declare class ApplicationService {
      * @throws {Error} If the handler input fails functional type evaluation checks.
      * @returns {void}
      */
-    mock(targets: string | any | Array<string | any>, handler: (req: cds.Request, data?: any) => Promise<any> | any): void;
+    mock(targets: string | Object | Array<string | Object>, handler: (req: cds.Request, data?: any) => Promise<any> | any): void;
     /**
     * @callback SoapResponseEvaluator
     * @param {cds.Request} req - The incoming CAP request context.
@@ -105,7 +105,7 @@ declare class ApplicationService {
      * @throws {Error} If the handler input fails functional type evaluation checks.
      * @returns {void}
      */
-    response(targets: string | any | Array<string | any>, handler: (req: cds.Request, data: any[]) => Promise<Array<any>> | Array<any>): void;
+    response(targets: string | Object | Array<string | Object>, handler: (req: cds.Request, data: any[]) => Promise<Array<Object>> | Array<Object>): void;
 }
 declare namespace ApplicationService {
     export { TraceContext, CdsEntity, SoapHeaderObject };
