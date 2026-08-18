@@ -1,7 +1,4 @@
-import { Orchestrator } from "./lib/orchestrator";
-import { Base } from "./lib/base";
 export namespace soap {
-    export { Orchestrator as OrchestratorService };
-    export { Base as BaseService };
+    export { ApplicationService };
 }
 //# sourceMappingURL=index.d.ts.map
