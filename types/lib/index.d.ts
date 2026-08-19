@@ -1,4 +1,6 @@
-export = ApplicationService;
+export type TraceContext = any;
+export type CdsEntity = any;
+export type SoapHeaderObject = any;
 /**
  * @typedef {import('./_orchestrator').TraceContext} TraceContext
  * @typedef {import('./_orchestrator').CdsEntity} CdsEntity
@@ -10,7 +12,7 @@ export = ApplicationService;
  *
  * @abstract
  */
-declare class ApplicationService {
+export class ApplicationService {
     /**
      * Initializes the abstract service base layout.
      * @param {CdsEntity} entity - Contextual meta-reflection model representing the current execution entity instance.
@@ -107,10 +109,4 @@ declare class ApplicationService {
      */
     response(targets: string | Object | Array<string | Object>, handler: (req: cds.Request, data: any[]) => Promise<Array<Object>> | Array<Object>): void;
 }
-declare namespace ApplicationService {
-    export { TraceContext, CdsEntity, SoapHeaderObject };
-}
-type TraceContext = any;
-type CdsEntity = any;
-type SoapHeaderObject = any;
 //# sourceMappingURL=index.d.ts.map

@@ -1,3 +1,4 @@
+import { ApplicationService } from "./lib";
 export namespace soap {
     export { ApplicationService };
 }
