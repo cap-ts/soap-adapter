@@ -21,44 +21,43 @@
     "Plugin"
   ],
   "dependencies": {
-    "@sap-cloud-sdk/connectivity": ">=4",
-    "@sap-cloud-sdk/http-client": ">=4",
-    "soap": ">=1"
+    "@sap-cloud-sdk/connectivity": "^4.7.0",
+    "@sap-cloud-sdk/http-client": "^4.7.0",
+    "cors": "^2.8.6",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0",
+    "p-limit": "^3.1.0",
+    "soap": "^1.10.0"
   },
   "peerDependencies": {
-    "@sap/cds": "^9.9.1",
-    "@cap-js/cds-types": "^0.18.0"
+    "@cap-js/cds-types": "^0.18.0",
+    "@sap/cds": "^9.9.1"
   },
   "devDependencies": {
-    "@sap/cds": "^9.9.1",
     "@cap-js/cds-types": "^0.18.0",
-    "fs-extra": "^11.3.0",
+    "@sap/cds": "^9.9.1",
+    "@types/cors": "^2.8.19",
     "cross-var": "^1.1.0",
-    "javascript-obfuscator": "^4.1.1",
+    "fs-extra": "^11.3.0",
+    "javascript-obfuscator": "^5.7.0",
     "rimraf": "^6.0.1",
-    "typescript": "^5.8.3",
+    "typescript": "^5.9.3",
     "uglify-js": "^3.19.3"
   },
   "scripts": {
-    "compile:types": "tsc",
-    "compile:main": "node build/index.js",
-    "clean": "rimraf ./.types",
-    "pull": "git submodule update --init --recursive --remote",
-    "build": "npm run compile:main && npm run compile:types && npm run clean",
-    "config": "node build/index.js --config",
-    "test": "node --test \"build/test/{unit,integration,regression}/**/*.test.js\"",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='build/test/**/*.test.js' \"build/test/{unit,integration,regression}/**/*.test.js\"",
-    "prepublishOnly": "npm run pull",
-    "prepare": "npm run build",
-    "postpublish": "node build/postpublish.js",
+    "build": "node build/index.js --build",
+    "test": "node build/index.js --test",
+    "prepublishOnly": "git submodule update --init --recursive --remote",
+    "prepare": "node build/index.js --build-secure",
+    "postpublish": "node build/index.js --post-publish",
     "gitonly": "npm run prepublishOnly && npm run prepare && npm run postpublish",
     "gitbuild": "npm run prepare && npm run postpublish",
     "patch": "npm version patch",
     "minor": "npm version minor",
     "major": "npm version major",
     "deploy": "npm publish --access public",
-    "deprecate": "node build/process.js --deprecate",
-    "unpublish": "node build/process.js --unpublish"
+    "deprecate": "node build/index.js --deprecate",
+    "unpublish": "node build/index.js --unpublish"
   },
   "files": [
     "index.cds",

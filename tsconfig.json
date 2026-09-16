@@ -1,24 +1,31 @@
 {
-    "compilerOptions": {
-        "allowJs": true,
-        "declaration": true,
-        "declarationMap": true,
-        "emitDeclarationOnly": true,
-        "skipLibCheck": true,
-        "removeComments": false,
-        "maxNodeModuleJsDepth": 1,
-        "outDir": "types",
-        "rootDir": ".types",
-        "module": "CommonJS",
-        "target": "ESNext",
-        "moduleResolution": "node",
-        "forceConsistentCasingInFileNames": true,
-        "strict": true,
-        "types": [
-            "@cap-js/cds-types"
-        ]
-    },
-    "include": [
-        ".types/**/*"
-    ]
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "NodeNext",
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": false,
+    "checkJs": false,
+    "declaration": true,
+    "declarationMap": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declarationDir": "./types",
+    "outDir": "./build/src",
+    "rootDir": "./build/src",
+    "resolveJsonModule": true,
+    "types": [
+      "@cap-js/cds-types"
+    ],
+    "moduleResolution": "nodenext"
+  },
+  "include": [
+    "build/src/**/*.ts",
+    "build/types/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "build/test",
+    "build/*.*"
+  ]
 }
