@@ -130,10 +130,10 @@ interface SoapHeaderObject {
  *   {@link ApplicationService#response}.
  */
 interface BaseAdapterInstance {
-    _requestHandlers: Record<string, Array<(payload: unknown, req: Request) => Promise<unknown> | unknown>>;
+    _requestHandlers: Record<string, Array<(req: Request, payload: unknown) => Promise<unknown> | unknown>>;
     _mockHandlers: Record<string, (req: Request, payload: unknown) => Promise<unknown>>;
     _headerHandlers: Record<string, Array<SoapHeaderObject | ((req: Request, payload: unknown) => Promise<SoapHeaderObject> | SoapHeaderObject)>>;
-    _responseHandlers: Record<string, Array<(rows: object[], req: Request) => Promise<object[]> | object[]>>;
+    _responseHandlers: Record<string, Array<(req: Request, rows: object[]) => Promise<object[]> | object[]>>;
 }
 /**
  * Frozen, read-only list of HTTP header names that must **never** flow from
@@ -233,13 +233,13 @@ declare class ApplicationService {
      * registered via {@link ApplicationService#request}.
      * @protected
      */
-    protected _requestHandlers: Record<string, Array<(payload: unknown, req: Request) => Promise<unknown> | unknown>>;
+    protected _requestHandlers: Record<string, Array<(req: Request, payload: unknown) => Promise<unknown> | unknown>>;
     /**
      * Per-entity ordered list of response mapper functions registered via
      * {@link ApplicationService#response}.
      * @protected
      */
-    protected _responseHandlers: Record<string, Array<(rows: object[], req: Request) => Promise<object[]> | object[]>>;
+    protected _responseHandlers: Record<string, Array<(req: Request, rows: object[]) => Promise<object[]> | object[]>>;
     /**
      * Per-entity mock replacement functions registered via
      * {@link ApplicationService#mock}.  Only one mock per entity; the last
@@ -395,14 +395,14 @@ declare class ApplicationService {
      *
      * @param {string|CdsEntity|Array<string|CdsEntity>} targets - One or
      *   more entity references that this request transformer applies to.
-     * @param {(payload: *, req: Request) => Promise<*>|*} handler - A
-     *   function that receives the current payload and the CAP request, and
+     * @param {(req: Request, payload: *) => Promise<*>|*} handler - A
+     *   function that receives the CAP request and the current payload, and
      *   returns the transformed payload (sync or async).
      * @throws {Error} If `handler` is not a function.
      * @returns {void}
      * @public
      */
-    request(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (payload: unknown, req: Request) => Promise<unknown> | unknown): void;
+    request(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (req: Request, payload: unknown) => Promise<unknown> | unknown): void;
     /**
      * Register a mock that fully replaces the SOAP round-trip for the given
      * entity/entities.
@@ -436,14 +436,14 @@ declare class ApplicationService {
      *
      * @param {string|CdsEntity|Array<string|CdsEntity>} targets - One or
      *   more entity references that this response mapper applies to.
-     * @param {(rows: object[], req: Request) => Promise<object[]>|object[]} handler
-     *   - A function that receives the current row array and the CAP
-     *   request, and returns the transformed row array (sync or async).
+     * @param {(req: Request, rows: object[]) => Promise<object[]>|object[]} handler
+     *   - A function that receives the CAP request and the current row
+     *   array, and returns the transformed row array (sync or async).
      * @throws {Error} If `handler` is not a function.
      * @returns {void}
      * @public
      */
-    response(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (rows: object[], req: Request) => Promise<object[]> | object[]): void;
+    response(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (req: Request, rows: object[]) => Promise<object[]> | object[]): void;
 }
 declare const createRequest: typeof import("./_request").createRequest;
 declare const getEntityKeyFields: typeof import("./_util/entity").getEntityKeyFields, dedupByKeys: typeof import("./_util/entity").dedupByKeys, isSoapService: typeof import("./_util/entity").isSoapService;
