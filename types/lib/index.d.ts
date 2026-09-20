@@ -136,6 +136,29 @@ interface BaseAdapterInstance {
     _responseHandlers: Record<string, Array<(rows: object[], req: Request) => Promise<object[]> | object[]>>;
 }
 /**
+ * Frozen, read-only list of HTTP header names that must **never** flow from
+ * an inbound CAP request into an outbound SOAP call.
+ *
+ * Covers:
+ * - **Auth material**: `authorization`, `proxy-authorization`, `saml-token`,
+ *   `x-forwarded-authorization`.
+ * - **Session cookies**: `cookie`, `set-cookie`.
+ * - **Forwarded-identity metadata**: `x-forwarded-for`, `x-forwarded-host`,
+ *   `x-forwarded-proto`, `x-real-ip`.
+ * - **Platform trace / correlation IDs**: `x-request-id`, `x-correlation-id`,
+ *   `x-vcap-request-id`, `x-cf-app-instance`, `x-b3-*`, `traceparent`,
+ *   `tracestate`, `sap-passport`.
+ * - **Security tokens**: `x-csrf-token`, `sec-websocket-key`,
+ *   `sec-websocket-accept`.
+ *
+ * The list is exposed as `ApplicationService.FORBIDDEN_SOAP_HEADERS` so
+ * consumers can inspect it.  It is frozen; mutating it will throw in strict
+ * mode.  To extend it, clone the array and add your own entries.
+ *
+ * @see {@link ApplicationService.stripSensitiveHeaders}
+ */
+declare const FORBIDDEN_SOAP_HEADERS: readonly string[];
+/**
  * Abstract base class for per-entity SOAP adapters.
  *
  * Consumers subclass this, override {@link ApplicationService#init} to
@@ -426,5 +449,5 @@ declare const createRequest: typeof import("./_request").createRequest;
 declare const getEntityKeyFields: typeof import("./_util/entity").getEntityKeyFields, dedupByKeys: typeof import("./_util/entity").dedupByKeys, isSoapService: typeof import("./_util/entity").isSoapService;
 declare const read: typeof import("./_read").read;
 export type { ReadOptions } from './_read';
-export { ApplicationService, createRequest, getEntityKeyFields, dedupByKeys, isSoapService, read, };
+export { ApplicationService, FORBIDDEN_SOAP_HEADERS, createRequest, getEntityKeyFields, dedupByKeys, isSoapService, read, };
 //# sourceMappingURL=index.d.ts.map
