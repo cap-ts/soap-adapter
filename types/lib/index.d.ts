@@ -28,7 +28,7 @@ import type { Request } from '@sap/cds';
  * @property {string} timestamp - ISO-8601 timestamp captured at the start
  *   of the request, used for log ordering and latency calculations.
  */
-interface TraceContext {
+export interface TraceContext {
     correlationId: string;
     user: string;
     timestamp: string;
@@ -48,7 +48,7 @@ interface TraceContext {
  * @property {{ name: string }} parent - The parent service or namespace
  *   object; `parent.name` is used to look up `cds.services[parentName]`.
  */
-interface CdsEntity {
+export interface CdsEntity {
     name: string;
     elements: Record<string, CdsEntityElement>;
     '@Soap.binding'?: SoapBindingConfig;
@@ -66,7 +66,7 @@ interface CdsEntity {
  * @property {string} [@Soap.path] - XPath-like path within the SOAP
  *   response document that this element maps to.
  */
-interface CdsEntityElement {
+export interface CdsEntityElement {
     type?: string;
     '@Soap.path'?: string;
     [key: string]: unknown;
@@ -86,7 +86,7 @@ interface CdsEntityElement {
  * @property {string} [rootResponse] - Optional XPath root element to unwrap
  *   from the inbound SOAP response before mapping.
  */
-interface SoapBindingConfig {
+export interface SoapBindingConfig {
     operation: string;
     resolvedAdapterClass?: new (entity: CdsEntity, req: Request, trace: TraceContext) => BaseAdapterInstance;
     rootRequest?: string;
@@ -104,7 +104,7 @@ interface SoapBindingConfig {
  * @property {string} [prefix] - XML namespace prefix, e.g. `'wsse'`.
  * @property {string} [xmlns] - XML namespace URI bound to `prefix`.
  */
-interface SoapHeaderObject {
+export interface SoapHeaderObject {
     value?: unknown;
     name?: string;
     prefix?: string;
@@ -129,7 +129,7 @@ interface SoapHeaderObject {
  *   ordered list of response mappers registered via
  *   {@link ApplicationService#response}.
  */
-interface BaseAdapterInstance {
+export interface BaseAdapterInstance {
     _requestHandlers: Record<string, Array<(req: Request, payload: unknown) => Promise<unknown> | unknown>>;
     _mockHandlers: Record<string, (req: Request, payload: unknown) => Promise<unknown>>;
     _headerHandlers: Record<string, Array<SoapHeaderObject | ((req: Request, payload: unknown) => Promise<SoapHeaderObject> | SoapHeaderObject)>>;
@@ -445,9 +445,153 @@ declare class ApplicationService {
      */
     response(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (req: Request, rows: object[]) => Promise<object[]> | object[]): void;
 }
-declare const createRequest: typeof import("./_request").createRequest;
-declare const getEntityKeyFields: typeof import("./_util/entity").getEntityKeyFields, dedupByKeys: typeof import("./_util/entity").dedupByKeys, isSoapService: typeof import("./_util/entity").isSoapService;
-declare const read: typeof import("./_read").read;
-export type { ReadOptions } from './_read';
+/** Options accepted by {@link createRequest}. */
+export interface CreateRequestOptions {
+    /** CAP event name, e.g. `'READ'`. */
+    event: string;
+    /** CQN query object. */
+    query: object;
+    /** Request data / query parameters. */
+    data?: object;
+    /**
+     * HTTP headers — shallow-cloned internally to avoid mutation of the
+     * caller's object.
+     */
+    headers?: Record<string, string>;
+    /** CDS entity definition assigned to `req.target`. */
+    target?: object;
+    /** By-key params array assigned to `req.params`. */
+    params?: unknown[];
+    /** `cds.User` instance assigned to `req.user`. */
+    user?: object;
+    /** Express `{ req, res }` pair assigned to `req.http`. */
+    http?: {
+        req: object;
+        res: object;
+    };
+}
+/**
+ * Minimal shape of a CSN entity definition as seen at runtime.
+ * The real type is `cds.linked.Entity` but that is not always available
+ * in the type path; we use a structural subset here.
+ */
+export interface CsnEntityDefinition {
+    keys?: Record<string, unknown>;
+    elements?: Record<string, {
+        key?: boolean;
+        [k: string]: unknown;
+    }>;
+    [k: string]: unknown;
+}
+/**
+ * Minimal structural shape of a CDS entity definition accepted by
+ * {@link read} (for example `srv.entities.BusinessPartnerSet`).
+ */
+export interface CdsEntityDef {
+    name?: string;
+    elements?: Record<string, unknown>;
+    keys?: Record<string, unknown>;
+    [key: string]: unknown;
+}
+/**
+ * Minimal structural contract of a SOAP-backed CAP service that {@link read}
+ * can dispatch against: its entity map and a `dispatch` method.
+ */
+export interface SoapService {
+    entities: Record<string, CdsEntityDef>;
+    dispatch(req: Request): Promise<unknown>;
+}
+/**
+ * Optional overrides for {@link read}.
+ */
+export interface ReadOptions {
+    /** Override headers entirely (still stripped before dispatch). */
+    headers?: Record<string, unknown>;
+    /** Override `inboundReq.params`. */
+    params?: unknown[];
+    /** Preferred source of HTTP headers when the inner tx request has lost them (e.g. inside `$expand` fan-out). */
+    outerReq?: unknown;
+    /** CSN entity definition used for key resolution when `srv.entities[entity]` is absent. */
+    fallbackEntityDef?: CdsEntityDef;
+}
+/**
+ * Creates a real `cds.Request` for SOAP dispatch, replacing any legacy
+ * plain-object `simulatedTxReq` literal (Q-04 audit fix).
+ *
+ * Using a real `cds.Request` ensures:
+ *   - `.error(code, msg)` accumulates errors via CAP semantics instead of
+ *     throwing immediately.
+ *   - All CAP middleware/pipeline hooks receive a properly typed request.
+ *
+ * @param opts - Options describing the request to create (single object
+ *   argument). `event` and `query` are required; `data`, `headers`,
+ *   `target`, `params`, `user` and `http` are optional.
+ * @returns A fully initialised `cds.Request` with a unique context id.
+ * @example
+ * const req = soap.createRequest({
+ *     event: 'READ',
+ *     query: SELECT.from('ext.BusinessPartnerSet'),
+ *     headers: { 'accept-language': 'en' },
+ *     user: inboundReq.user,
+ * });
+ * @public
+ */
+declare const createRequest: (opts: CreateRequestOptions) => Request;
+/**
+ * Resolve the flat list of key-field names for a CSN entity definition.
+ *
+ * Prefers `definition.keys` (present on all CAP-compiled entities, may be
+ * empty) and falls back to scanning `definition.elements` for entries with
+ * `key: true` (defensive path for exotic CSN shapes seen in projections
+ * and unfolded queries).
+ *
+ * @param definition - CSN entity definition, e.g. `srv.entities.Foo`.
+ * @returns Zero or more key-field names.
+ * @public
+ */
+declare const getEntityKeyFields: (definition: CsnEntityDefinition | null | undefined) => string[];
+/**
+ * Deduplicate a flat row array by the given composite key fields.
+ *
+ * The first occurrence of each composite key wins. Rows with any `null` /
+ * `undefined` key value are passed through as-is (missing keys cannot
+ * establish identity, so dropping them would silently lose data). When
+ * `keyFields` is empty, the input is returned unchanged.
+ *
+ * Uses `'||'` as the composite-key separator (matches the internal
+ * convention).
+ *
+ * @param rows      - Array of plain objects (SOAP response rows).
+ * @param keyFields - Field names to use as the composite key.
+ * @returns Deduped rows in original order.
+ * @public
+ */
+declare const dedupByKeys: (rows: unknown[], keyFields: string[]) => unknown[];
+/**
+ * Return `true` when the named service is configured as a SOAP service —
+ * either `cds.requires[name].kind === 'soap'` or the CSN definition carries
+ * the `@soap` annotation. Safe to call before `cds.services` is populated;
+ * relies only on `cds.requires` and `cds.model.definitions`.
+ *
+ * Consumers that route a single request between REST/OData/SOAP siblings
+ * need this check; it lived in every consumer's private helpers.
+ *
+ * @param serviceName - Fully-qualified or short CDS service name.
+ * @returns `true` when the service is SOAP-backed, `false` otherwise.
+ * @public
+ */
+declare const isSoapService: (serviceName: string) => boolean;
+/**
+ * One-shot SOAP read: assemble headers, build a real `cds.Request`, dispatch,
+ * and deduplicate the result by entity key fields.
+ *
+ * @param {SoapService} srv - The SOAP `ApplicationService` instance.
+ * @param {string} entity - Key into `srv.entities`; used for key-field resolution and as the request target.
+ * @param {Request} req - Inbound CAP request (source of user, params, headers).
+ * @param {object} query - CQN SELECT query passed to `createRequest`.
+ * @param {ReadOptions} [opts] - Optional overrides.
+ * @returns {Promise<any[]>} Always an array; `[]` when dispatch returns nothing.
+ */
+declare const read: (srv: SoapService, entity: string, req: Request, query: unknown, opts?: ReadOptions) => Promise<unknown[]>;
 export { ApplicationService, FORBIDDEN_SOAP_HEADERS, createRequest, getEntityKeyFields, dedupByKeys, isSoapService, read, };
 //# sourceMappingURL=index.d.ts.map

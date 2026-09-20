@@ -602,6 +602,23 @@ if (soap.isSoapService('BP')) {
 
 Returns `boolean`.
 
+### Types under `soap`
+
+Everything the package exposes, values and types, lives under the single `soap` namespace, so one import is enough:
+
+```ts
+import { soap } from '@cap-ts/soap-adapter';
+
+const opts: soap.ReadOptions = { headers: {} };
+class BP extends soap.ApplicationService {
+    init(): void {
+        this.header('BusinessPartner', (req): soap.SoapHeaderObject => ({ value: {} }));
+    }
+}
+```
+
+Available types: `soap.ReadOptions`, `soap.SoapService`, `soap.CdsEntityDef`, `soap.CsnEntityDefinition`, `soap.CreateRequestOptions`, `soap.CdsEntity`, `soap.CdsEntityElement`, `soap.SoapBindingConfig`, `soap.SoapHeaderObject`, `soap.TraceContext`, `soap.BaseAdapterInstance`. There is no top-level export besides `soap`.
+
 ---
 
 ## ⚙️ Configuration (`cds.env.soap.*`)

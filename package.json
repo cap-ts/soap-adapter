@@ -63,8 +63,8 @@
     "index.cds",
     "cds-plugin.js",
     "src",
-    "types/*.d.ts*",
-    "types/lib/*.d.ts*",
+    "types/index.d.ts",
+    "types/lib/index.d.ts",
     "src/lib/**/*"
   ],
   "cds": {
