@@ -33,32 +33,6 @@
     "@cap-js/cds-types": "^0.18.0",
     "@sap/cds": "^9.9.1"
   },
-  "devDependencies": {
-    "@cap-js/cds-types": "^0.18.0",
-    "@sap/cds": "^9.9.1",
-    "@types/cors": "^2.8.19",
-    "cross-var": "^1.1.0",
-    "fs-extra": "^11.3.0",
-    "javascript-obfuscator": "^5.7.0",
-    "rimraf": "^6.0.1",
-    "typescript": "^5.9.3",
-    "uglify-js": "^3.19.3"
-  },
-  "scripts": {
-    "build": "node ../.bash/index.js --build",
-    "test": "node ../.bash/index.js --test",
-    "prepublishOnly": "git submodule update --init --recursive --remote",
-    "prepare": "node ../.bash/index.js --build-secure",
-    "postpublish": "node ../.bash/index.js --post-publish",
-    "gitonly": "npm run prepublishOnly && npm run prepare && npm run postpublish",
-    "gitbuild": "npm run prepare && npm run postpublish",
-    "patch": "npm version patch",
-    "minor": "npm version minor",
-    "major": "npm version major",
-    "deploy": "npm publish --access public",
-    "deprecate": "node ../.bash/index.js --deprecate",
-    "unpublish": "node ../.bash/index.js --unpublish"
-  },
   "files": [
     "index.cds",
     "cds-plugin.js",
