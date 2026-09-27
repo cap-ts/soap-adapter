@@ -57,7 +57,7 @@ Optional but recommended:
 
 | Dep | When | Notes |
 | --- | --- | --- |
-| `ts-node` | You author adapter classes in TypeScript | The loader registers `ts-node/transpile-only` on demand and logs a `warn` if it's missing. |
+| `ts-node` | You author adapter classes in TypeScript and nothing else loads `.ts` | Not needed with `cds watch` / `cds-tsx`, `tsx`, or Node 22.18 and later (built-in type stripping). Otherwise the loader registers `ts-node/transpile-only` on demand. A missing `ts-node` is only a `debug` line; if the adapter then fails to load, the error says how to fix it. |
 
 ---
 
@@ -923,7 +923,8 @@ node -e "const cds = require('@sap/cds'); console.log(cds.root)"
 **Fix checklist:**
 
 1. The module at the resolved path must `module.exports` the class (not `exports.MyClass`).
-2. If using TypeScript, `ts-node` must be installed (`npm i -D ts-node`).
+2. If using TypeScript, something must load `.ts`: `cds watch` / `cds-tsx`, `tsx`, Node 22.18 or later, or `ts-node`
+   (`npm i -D ts-node`). The `Failed to load adapter` error of a `.ts` adapter lists these options.
 3. For monorepo sibling packages, ensure the package is listed in `dependencies` and `npm install` has run.
 
 ---
