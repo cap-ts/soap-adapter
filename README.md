@@ -2,12 +2,12 @@
 
 [![Version npm](https://img.shields.io/npm/v/@cap-ts/soap-adapter.svg)](https://www.npmjs.com/package/@cap-ts/soap-adapter)
 
-> **CAP plugin for SOAP Adapter that lets `@sap/cds` services expose OData v4 entities backed by legacy SOAP web services.**
-> Node.js ≥ 18, `@sap/cds` v7 / v8 / v9.
+> **CAP plugin that exposes legacy SOAP web services as read-only, OData-style entities of a `@sap/cds` service.**
+> Node.js ≥ 20, `@sap/cds` ^9.9.1 or ^10 (cds 10 itself requires Node.js ≥ 22).
 
 ## 📦 About
 
-`@cap-ts/soap-adapter` turns a WSDL operation into a CAP entity: consumers declare the entity in `.cds` with a small set of `@Soap.*` annotations, ship an adapter subclass that shapes the SOAP request/response, and the plugin does the rest — CSRF-safe HTTP routing (`/soap/**`), destination + JWT propagation, filter push-down, XML build/parse, response flattening, and CAP OData v4 exposure.
+`@cap-ts/soap-adapter` turns a WSDL operation into a CAP entity: consumers declare the entity in `.cds` with a small set of `@Soap.*` annotations, ship an adapter subclass that shapes the SOAP request/response, and the plugin does the rest — CSRF-safe HTTP routing (`/soap/**`), destination + JWT propagation, filter push-down, XML build/parse, response flattening, and an OData-style JSON response (`@odata.context`, `@odata.count`, `@odata.nextLink`). It is read only: writes are rejected with 405.
 
 ---
 
@@ -43,14 +43,15 @@ The package registers itself as a CAP plugin via `cds-plugin` — no explicit `r
 
 ### Peer requirements
 
-| Peer | Minimum | Notes |
+| Peer | Version | Notes |
 | --- | --- | --- |
-| `@sap/cds` | 7.0 | Tested against 7, 8, 9. |
-| Node.js | 18 | Uses `crypto.randomUUID`, `structuredClone`, top-level `require('node:test')` for tests. |
-| `@sap-cloud-sdk/http-client` | 4.7 | Auto-installed. |
-| `@sap-cloud-sdk/connectivity` | 4.7 | Auto-installed. Provides destination resolution + JWT forwarding. |
-| `soap` | 1.10 | Auto-installed. |
-| `p-limit` | 6.2 | Auto-installed. |
+| `@sap/cds` | `^9.9.1 \|\| ^10` | Tested against 9.9.3 and 10.1.1. |
+| Node.js | >=20 | cds 10 itself requires Node 22 or later. |
+| `@cap-js/cds-types` | >=0.18.0, optional | TypeScript types only; not needed to run the adapter. |
+| `@sap-cloud-sdk/http-client` | ^4.7.0 | Destination-based HTTP calls. |
+| `@sap-cloud-sdk/connectivity` | ^4.7.0 | Destination resolution and JWT forwarding. |
+| `soap` | ^1.10.0 | Dependency, installed automatically. |
+| `p-limit` | ^3.1.0 | Dependency, installed automatically. |
 
 Optional but recommended:
 
@@ -99,7 +100,7 @@ Optional but recommended:
 └────────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
-        CAP OData v4 endpoint at `/soap/<path/service>/**`
+        OData-style GET endpoint at `/soap/<service path>/<Entity>`
 ```
 
 Two-word summary: **annotate + subclass**. The plugin needs both — the annotations tell it *what* to route, the subclass tells it *how* to marshal.
@@ -175,30 +176,27 @@ class BP extends soap.ApplicationService {
     init() {
         const { BusinessPartner } = this.entities;
 
-        this.header(BusinessPartner, (req) => ({
-            // Strip inbound HTTP auth/session/trace before propagating.
-            ...soap.ApplicationService.stripSensitiveHeaders(req.headers ?? {}),
-            'SOAPAction': '"GetBusinessPartner"'
-        }));
-
         this.request(BusinessPartner, (req, payload) => {
-            // Shape the SOAP body from the incoming CAP $filter.
+            // Shape the SOAP body (the operation's input message) from the incoming CAP $filter.
             const key = req.query?.SELECT?.where; // CQN WHERE array
             return { BusinessPartnerID: extractBpId(key) };
         });
 
         this.response(BusinessPartner, (req, rows) => {
-            // Rows have already been flattened per `@Soap.path` — massage further if needed.
-            return rows.map(r => ({ ...r, FullName: r.FullName?.trim() }));
+            // Rows are the raw entries under `rootResponse`; `@Soap.path` mapping runs after this hook.
+            return rows.filter(r => r != null);
         });
     }
 }
 module.exports = BP;
 ```
 
-**4. Start `cds watch`.** The loader will mount:
+**4. Start `cds watch`.** The loader mounts GET routes under `/soap` + the service's `@path`, or, without `@path`,
+its short name in lower case:
 
-- `/soap/BP/BusinessPartner` — raw SOAP-over-HTTP route (@requires-enforced).
+- `/soap/bp/BusinessPartner` — the entity set (`$select`, `$count`, `$filter`, `$orderby`, `$top`, `$skip`; any other
+  system query option is a 400). `@requires` on the service is enforced.
+- `/soap/bp/BusinessPartner/<key>` — a read by key (404 when nothing comes back).
 
 ---
 
@@ -206,7 +204,7 @@ module.exports = BP;
 
 [↑ Table of Contents](#-table-of-contents)
 
-All six annotations are declared in the package's `index.cds` under the single canonical top-level namespace. They are real CDS typed annotations, so `cds compile` type-checks consumer usage — typos and shape mismatches surface at build time, not at first request.
+All seven annotations (`@Soap` and the six `@Soap.*` below) are declared in the package's `index.cds` under the single canonical top-level namespace. `@Soap` (Boolean) only marks a service in the model; what makes a service SOAP-backed at runtime is `kind: "soap"` in `cds.requires`. They are real CDS typed annotations, so `cds compile` type-checks consumer usage — typos and shape mismatches surface at build time, not at first request.
 
 ### `@Soap.binding` *(struct, entity-level)*
 
@@ -222,8 +220,8 @@ entity BusinessPartner { … }
 
 | Field | Required | Notes |
 | ----- | -------- | ----- |
-| `rootRequest` | Yes | SOAP element name used to wrap the outbound payload. Must match the WSDL operation's `<input message>` root. |
-| `rootResponse` | No | SOAP response element whose contents become the CAP result. If omitted the loader falls back to `@Soap.rootResponse` (scalar), then to a heuristic derived from the operation name. |
+| `rootRequest` | No | Documents the operation's input element. The runtime does not wrap the payload with it: `node-soap` builds the request envelope from the WSDL operation, and the `request()` hook's return value is passed to it as the input message. |
+| `rootResponse` | No | Dot path of the SOAP response element whose contents become the CAP result. If `@Soap.rootResponse` (scalar) is set it takes precedence; without either, `<operation>Response` is used. |
 
 ### `@Soap.operation` *(scalar, entity-level)* — **required**
 
@@ -238,11 +236,11 @@ An entity without an `@Soap.operation` is invisible to the loader — no route i
 
 ### `@Soap.rootResponse` *(scalar, entity-level)* — optional
 
-Only consulted when `@Soap.binding.rootResponse` is absent. Documents the SOAP response element to unwrap.
+Dot path of the SOAP response element to unwrap. When set, it takes precedence over `@Soap.binding.rootResponse`.
 
 ### `@Soap.path` *(scalar, element-level)*
 
-Explicit dot-path override applied when the orchestrator walks a raw SOAP response tree to locate the value for this element.
+Dot path, relative to one entry under `rootResponse`, from which the value of this element is read.
 
 ```cds
 entity BusinessPartner {
@@ -252,7 +250,7 @@ entity BusinessPartner {
 }
 ```
 
-Without `@Soap.path`, the orchestrator matches by element name (case-sensitive) and falls back to a structural best-guess. `@Soap.path` short-circuits both, which is essential when SOAP responses nest values several levels deep or when element names collide across namespaces.
+Without `@Soap.path`, the element's own name is used as the path (case-sensitive). `$value` wrappers and `item` / `Item` arrays are unwrapped along the way; a missing value becomes `null`. Only elements with a built-in `cds.*` type are mapped. `@Soap.path` is essential when SOAP responses nest values several levels deep or when element names differ from the response.
 
 ### `@Soap.filterRestriction` *(struct, entity-level)*
 
@@ -269,7 +267,7 @@ entity BusinessPartner { … }
 | Field | Type | Behaviour |
 | ----- | ---- | --------- |
 | `mandatoryFields` | `array of String` | Property names that MUST appear in `$filter` for the request to be accepted. Missing fields raise a 400 with a diagnostic message that names the field. |
-| `multipleSelection` | `Boolean` (default `true`) | When `false`, `$filter` on any mandatory field must be a single equality clause. `in(…)` / `or` / `ne` combinations are rejected as 400. The runtime expands `key in (a,b,c)` into N parallel SOAP calls only when `multipleSelection: true`. |
+| `multipleSelection` | `Boolean` (default: not set) | Set it to `false` when the SOAP operation accepts only one key value per call. The runtime then expands a `$filter` with `<first key> in (a,b,c)` into one SOAP call per value (in batches of `cds.env.soap.multiSelectionConcurrency`, default 5) and merges the results. A second `in(…)` on the key, or `in(…)` combined with `or`, is a 400 (`UNSUPPORTED_MULTI_SELECTION_FILTER`). When `true` or not set, nothing is expanded and the `request()` hook receives the `in(…)` as is. |
 
 See § [Filter push-down & `filterRestriction`](#-filter-push-down--filterrestriction) below.
 
@@ -332,18 +330,25 @@ Available inside `init()` via `this.*`:
 
 ### `this.header(entity, fn)` — outbound HTTP headers
 
-Registers a hook that produces additional HTTP headers for every outbound SOAP call for `entity`.
+Registers a hook (or a static object) that adds a **SOAP header** — an element inside the envelope's `<soap:Header>` — to every outbound call for `entity`. It is passed to `node-soap`'s `addSoapHeader`; it does not set HTTP headers.
 
 ```js
-this.header(BusinessPartner, (req) => ({
-    'SOAPAction': '"GetBusinessPartner"',
-    'X-Correlation-ID': req.headers['x-correlation-id'] ?? crypto.randomUUID()
+// Plain map: each key becomes a header element.
+this.header(BusinessPartner, (req) => ({ TraceID: req.id }));
+
+// Structured: value plus element name, namespace prefix and URI.
+this.header(BusinessPartner, () => ({
+    value: { Username: 'user', Password: 'secret' },
+    name: 'UsernameToken', prefix: 'wsse',
+    xmlns: 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd'
 }));
 ```
 
-- `req` — the incoming CAP `Request` object.
-- Return value: a plain `Record<string, string>`. Merged on top of the base headers computed by the runtime. Returning `null` / `undefined` is a no-op.
-- Called once per SOAP dispatch (including fan-out calls for `multipleSelection: true`).
+- Hook arguments: `(req, payload)` — the CAP `Request` and the outbound payload.
+- Return value: a plain map, or a structured `{ value, name?, prefix?, xmlns? }`. Returning `null` / `undefined` adds nothing.
+- In a plain map, keys on the forbidden list below are dropped (with a warning), so inbound credentials cannot be copied into the envelope by accident.
+- Without any `header()` hook the runtime adds one default SOAP header, `TraceID`, with the request's correlation id.
+- Called once per SOAP dispatch (including each fan-out call for `multipleSelection: false`).
 
 ### `this.request(entity, fn)` — outbound SOAP payload
 
@@ -357,10 +362,11 @@ this.request(BusinessPartner, (req, payload) => {
 });
 ```
 
-- `req` — incoming CAP `Request`.
-- `payload` — the pre-built payload object (already includes filter-extracted fields). Mutate or replace.
-- Return value: the object to serialise into the SOAP `<Body>` wrapped under `rootRequest`.
-- Returning `undefined` falls back to the runtime-built payload.
+- `req` — incoming CAP `Request`; read `$filter` / keys from `req.query.SELECT.where`.
+- `payload` — `req.data` (usually `{}` for a READ) for the first hook, else the previous hook's return value.
+- Return value: the operation's input message, passed to `node-soap`, which builds the `<soap:Body>` from the WSDL.
+- Several `request()` hooks run in registration order, each receiving the previous result. Always return the payload:
+  a hook that returns `undefined` sends an empty request.
 
 ### `__filterPushedDown` sentinel
 
@@ -395,13 +401,13 @@ this.mock(BusinessPartner, (req) => {
 });
 ```
 
-- Return value: array of raw row objects (same shape as the SOAP response would produce — **before** `@Soap.path` flattening).
+- Return value: the final rows, in the shape of the CAP entity. The mock's result is returned as is: no `response()` hooks, no `@Soap.path` mapping and no in-memory `$filter` / `$orderby` / paging.
 - When a mock is registered the runtime skips destination resolution, WSDL loading, and HTTP dispatch entirely.
-- Mocks are **not** active in production builds (`NODE_ENV=production`); registering one logs a `warn`.
+- A registered mock is always active, in every environment — register it only in test or development code.
 
 ### `this.response(entity, fn)` — inbound result transform
 
-Registers a hook that post-processes the result before they are returned to the CAP OData layer.
+Registers a hook that post-processes the SOAP result before it is mapped to the entity.
 
 ```js
 this.response(BusinessPartner, (req, rows) => {
@@ -412,17 +418,20 @@ this.response(BusinessPartner, (req, rows) => {
 ```
 
 - `req` — the incoming CAP `Request`.
-- `rows` — array of objects already flattened by `@Soap.path` resolution. Each object has one key per entity element.
-- Return value: the final rows array passed to CAP. Must be an array; returning `undefined` falls back to `rows` unchanged.
+- `rows` — the raw entries under `rootResponse` (always an array). `@Soap.path` mapping and the in-memory
+  `$filter` / `$orderby` / paging run **after** this hook, so return entries in the raw response shape.
+- Several `response()` hooks run in registration order, each receiving the previous result. Always return an array:
+  a hook that returns `undefined` yields an empty result.
 
 ### `soap.ApplicationService.stripSensitiveHeaders(headers)` — static helper
 
-Strips inbound HTTP headers that must never be forwarded to a backend SOAP service (auth tokens, session cookies, SAP passport, trace/correlation identifiers).
+Returns a copy of a header map without the entries that must never reach a backend (auth tokens, session cookies, SAP passport, trace/correlation identifiers). Use it when a `header()` hook builds SOAP headers from a map it did not write itself, such as the inbound request headers:
 
 ```js
 this.header(BusinessPartner, (req) => ({
-    ...soap.ApplicationService.stripSensitiveHeaders(req.headers ?? {}),
-    'SOAPAction': '"GetBusinessPartner"'
+    // Everything from the inbound request except credentials, cookies and trace ids.
+    ...soap.ApplicationService.stripSensitiveHeaders(req.http?.req?.headers ?? {}),
+    TraceID: req.id
 }));
 ```
 
@@ -468,13 +477,10 @@ const myForbidden = new Set([
     ...soap.ApplicationService.FORBIDDEN_SOAP_HEADERS,
     'x-my-internal-token',
 ]);
-this.header(BusinessPartner, (req) => {
-    const clean = {};
-    for (const [k, v] of Object.entries(req.headers ?? {})) {
-        if (!myForbidden.has(k.toLowerCase())) clean[k] = v;
-    }
-    return clean;
-});
+const withoutForbidden = (headers) =>
+    Object.fromEntries(Object.entries(headers).filter(([k]) => !myForbidden.has(k.toLowerCase())));
+
+this.header(BusinessPartner, (req) => withoutForbidden(req.http?.req?.headers ?? {}));
 ```
 
 ---
@@ -533,7 +539,7 @@ const rows = await soap.read(
     req,               // inbound CAP request (source of user, params, headers)
     req.query,         // CQN SELECT query
     {                  // optional overrides
-      headwrs: ...,
+      headers: ...,
       params: ...,
       outerReq: req,
       fallbackEntityDef: ...
@@ -588,7 +594,7 @@ Returns `any[]` — deduped rows in original order.
 
 ### `soap.isSoapService(serviceName)` — check if a service is SOAP-backed
 
-Returns `true` when the named service is configured as a SOAP service — either `cds.requires[name].kind === 'soap'` or the CSN definition carries the `@soap` annotation. Safe to call before `cds.services` is populated; relies only on `cds.requires` and `cds.model.definitions`.
+Returns `true` when the named service is configured as a SOAP service — either `cds.requires[name].kind === 'soap'` or the CSN definition carries the legacy lower-case `@soap` annotation (the current `@Soap` annotation is not checked here). Safe to call before `cds.services` is populated; relies only on `cds.requires` and `cds.model.definitions`.
 
 ```js
 if (soap.isSoapService('BP')) {
@@ -631,9 +637,9 @@ Global runtime knobs live under `cds.env.soap` (i.e., the `cds.soap` key in `pac
 {
   "cds": {
     "soap": {
-      "maxConcurrent": 50,
       "pushFilters": true,
       "pageSize": 1000,
+      "multiSelectionConcurrency": 5,
       "idempotency": {
         "enabled": false,
         "ttl": 300000,
@@ -646,10 +652,11 @@ Global runtime knobs live under `cds.env.soap` (i.e., the `cds.soap` key in `pac
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `soap.maxConcurrent` | `number` | `50` | Maximum number of parallel outbound SOAP calls per service instance. Enforced by `p-limit`. Fan-out calls (from `multipleSelection: true`) share this pool. |
+| `soap.multiSelectionConcurrency` | `number` | `5` | Batch size for the fan-out of `multipleSelection: false` entities: that many SOAP calls run in parallel, batch after batch. |
+| `soap.maxConcurrent` | `number` | `50` | Reserved. A per-destination `p-limit` pool is prepared from it, but the request path does not use it yet. |
 | `soap.pushFilters` | `boolean` | `true` | Enables the [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel). Set to `false` to force the in-memory `$filter` / `$orderby` / `$top` / `$skip` evaluator even when a `request()` hook sets the sentinel — useful for A/B testing or when a push-down implementation is suspected of misbehaving. |
 | `soap.pageSize` | `number` | `1000` | Default page size for the bounded in-memory fallback when the adapter does **not** set the `__filterPushedDown` sentinel (or when `pushFilters: false`). When the filtered result exceeds one page, the runtime emits an `@odata.nextLink` header and logs a one-time-per-service warning. Hard-capped at `5000` regardless of override. |
-| `soap.idempotency.enabled` | `boolean` | `false` | Feature flag — reserved for write-handler support (not yet shipped). When `true`, duplicate SOAP requests within the TTL window are short-circuited with a cached response. |
+| `soap.idempotency.enabled` | `boolean` | `false` | Reserved for write-handler support, which is not shipped: the adapter is read only, so this has no effect today. |
 | `soap.idempotency.ttl` | `number` (ms) | `300000` | Cache TTL for idempotency keys (5 minutes). |
 | `soap.idempotency.maxEntries` | `number` | `1000` | LRU eviction threshold for the idempotency cache. |
 
@@ -659,9 +666,8 @@ Per-service configuration lives in `cds.requires.<ServiceName>`:
 | --- | ---- | -------- | ----------- |
 | `kind` | `"soap"` | **Yes** | Marks the service for SOAP handling. |
 | `wsdl` | `string` | **Yes** | Path to the WSDL file, relative to `cds.root`. |
-| `credentials.destination` | `string` | Yes (BTP) | BTP destination name. Resolved via `@sap-cloud-sdk/connectivity`. |
-| `credentials.url` | `string` | Yes (local) | Direct SOAP endpoint URL. Used when no BTP destination is configured (local dev / on-premise). |
-| `credentials.username` / `password` | `string` | No | Basic-auth credentials. Only used when `url` is set (not for BTP destinations — those carry credentials in the destination itself). |
+| `credentials.destination` | `string` | **Yes** | Destination name, resolved via `@sap-cloud-sdk/connectivity` (BTP destination service, or the `destinations` environment variable locally). Without it the service fails with `No 'credentials.destination' configured`. |
+| `credentials.path` | `string` | No | Path appended to the destination URL to form the SOAP endpoint. |
 
 ---
 
@@ -674,9 +680,9 @@ In a multi-tenant SaaS application each subscriber has its own BTP destination. 
 ### How it works
 
 1. The CAP runtime validates the incoming JWT and attaches the tenant context to `req`.
-2. On each SOAP dispatch the adapter calls `@sap-cloud-sdk/connectivity`'s `getDestination()` with the subscriber tenant token extracted from `req.http.req.headers.authorization`.
-3. The destination service returns the tenant-specific endpoint URL and credentials.
-4. The WSDL is re-fetched (and cached per tenant+destination) if the endpoint differs from a previously seen one.
+2. On each SOAP dispatch the adapter calls `@sap-cloud-sdk/connectivity`'s `getDestination()` with the caller's JWT (from the request's token info, or the `Authorization: Bearer` header) and tenant.
+3. The destination service returns the tenant-specific endpoint URL and credentials; the HTTP call goes through `@sap-cloud-sdk/http-client`, so the destination's authentication type (principal propagation, OAuth2, basic, …) applies.
+4. The SOAP client is built from the local WSDL file and cached per service, destination, endpoint URL and tenant.
 
 ### Configuration
 
@@ -700,37 +706,21 @@ The destination name is the **provider** destination registered in BTP. For mult
 
 ### Local development without a BTP destination
 
-Use `credentials.url` + optional `credentials.username` / `credentials.password` in your `cds.env` override (`.cdsrc-private.json` or environment variables):
+Keep `credentials.destination` and define that destination locally through the Cloud SDK's `destinations`
+environment variable (for example in a git-ignored `.env` or `default-env.json`):
 
-```json
-{
-  "cds": {
-    "requires": {
-      "BP": {
-        "credentials": {
-          "url": "http://localhost:8080/soap/BP",
-          "username": "alice",
-          "password": "Alice@Cap#"
-        }
-      }
-    }
-  }
-}
+```bash
+destinations='[{"name":"DEST_BP","url":"http://localhost:8080","username":"alice","password":"<password>"}]' cds watch
 ```
 
-> **Security note.** Never commit `credentials.password` to source control. Use `.cdsrc-private.json` (git-ignored) or the `CDS_REQUIRES_BP_CREDENTIALS_PASSWORD` environment variable pattern.
+> **Security note.** Never commit destination credentials to source control.
 
 ### JWT forwarding details
 
-The adapter propagates the subscriber JWT as a Bearer token in the `Authorization` header of the outbound SOAP call **unless** the `header()` hook returns its own `Authorization` key (which takes precedence). Use `stripSensitiveHeaders()` in your `header()` hook if you want to suppress forwarding entirely:
-
-```js
-this.header(BusinessPartner, (req) => ({
-    ...soap.ApplicationService.stripSensitiveHeaders(req.headers ?? {}),
-    // No Authorization key → runtime does NOT forward the inbound JWT.
-    'SOAPAction': '"GetBusinessPartner"'
-}));
-```
+The caller's JWT is used for the **destination lookup** only. What the backend receives is decided by the
+destination: with principal propagation or OAuth2 user token exchange the Cloud SDK derives the outbound credentials
+from it; with basic authentication or client credentials the destination's own credentials are used. The inbound
+`Authorization` header is never copied into the SOAP call, and a `header()` hook cannot set HTTP headers.
 
 ---
 
@@ -756,10 +746,9 @@ See [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel) for the full c
 **Path B — Bounded in-memory fallback.**
 
 1. The CAP OData layer parses `$filter` into a CQN `WHERE` array.
-2. The loader's filter extractor walks the CQN tree and produces a flat `{ fieldName: value | value[] }` map.
-3. The runtime passes this map to the `request()` hook as part of `payload`.
-4. For `multipleSelection: false` entities with an `in(…)` filter, the runtime fans out into N sequential/parallel SOAP calls (one per value) and merges results.
-5. The SOAP result is filtered / sorted / paginated **in Node memory** by the in-memory evaluator, bounded by `cds.env.soap.pageSize` (default `1000`, capped at `5000`). When the filtered set exceeds one page, an `@odata.nextLink` is emitted so the client can paginate, and a **one-time-per-service** `in-memory pagination fallback truncated …` warning is logged suggesting migration to Path A.
+2. The `request()` hook reads what it needs from `req.query.SELECT.where` and builds the payload.
+3. For `multipleSelection: false` entities with `<first key> in (…)`, the runtime fans out into one SOAP call per value (batches of `multiSelectionConcurrency`) and merges the results.
+4. The SOAP result is filtered / sorted / paginated **in Node memory** by the in-memory evaluator, bounded by `cds.env.soap.pageSize` (default `1000`, capped at `5000`). When the filtered set exceeds one page, an `@odata.nextLink` is emitted so the client can paginate, and a **one-time-per-service** `in-memory pagination fallback truncated …` warning is logged suggesting migration to Path A.
 
 ### `@Soap.filterRestriction` reference
 
@@ -782,13 +771,15 @@ GET /soap/FI/e_FinancialDocument?$filter=FiscalYear eq '2025'
 
 | Value | `$filter` clause | Runtime behaviour |
 | ----- | ---------------- | ----------------- |
-| `true` (default) | `BusinessPartnerID in ('BP001','BP002')` | Expands to 2 parallel SOAP calls; results merged. |
-| `false` | `BusinessPartnerID in ('BP001','BP002')` | Rejected with HTTP 400. |
+| `false` | `BusinessPartnerID in ('BP001','BP002')` | Expands to 2 SOAP calls (one per value, run in parallel); results merged. |
+| `false` | `BusinessPartnerID in ('BP001') or Name eq 'x'`, or two `in(…)` on the key | Rejected with HTTP 400 `UNSUPPORTED_MULTI_SELECTION_FILTER`. |
 | `false` | `BusinessPartnerID eq 'BP001'` | Single SOAP call. |
+| `true` / not set | any | Single SOAP call; the `request()` hook handles `in(…)` itself (or the in-memory evaluator filters the result). |
 
-### Combining mandatory fields with `$expand`
+### `$expand`
 
-When an entity is used as a value-help target (via `$expand` from a parent entity), the parent's key fields are automatically injected into the filter map — `mandatoryFields` validation still applies. Ensure the parent passes all required keys as association keys.
+The `/soap/**` routes do not accept `$expand` (it is a 400). To combine SOAP entities with others, read them through
+another service, for example `@cap-ts/remote-service-adapter`, which expands associations across backends.
 
 ---
 
@@ -798,10 +789,10 @@ When an entity is used as a value-help target (via `$expand` from a parent entit
 
 | Guarantee | Detail |
 | --- | --- |
-| **No credential leakage** | `stripSensitiveHeaders()` removes auth, cookie, and SAP Passport headers before outbound dispatch. Adapters that call it in `header()` are safe by default. |
+| **No credential leakage** | Inbound HTTP headers are never forwarded. Keys on the forbidden list (auth, cookie, SAP Passport, trace headers) are dropped from plain-map `header()` results, and `stripSensitiveHeaders()` removes them from any map you build. |
 | **JWT tenant isolation** | Destination resolution uses the subscriber JWT; a tenant cannot access another tenant's destination. |
 | **Filter injection prevention** | The filter extractor operates on the parsed CQN tree (not raw `$filter` string), so SQL/SOAP injection via `$filter` is structurally impossible. |
-| **No WSDL caching across tenants** | WSDL cache is keyed by `tenant + destination name + endpoint URL`. A WSDL change on one tenant does not affect others. |
+| **No client sharing across tenants** | The SOAP client cache is keyed by service, destination name, endpoint URL and tenant. |
 | **`@requires` enforcement** | All routes mounted under `/soap/**` inherit the CAP `@requires` annotation from the service definition. Unauthenticated requests are rejected by the CAP runtime before reaching the adapter. |
 
 ### Middleware ordering for consumers
@@ -872,13 +863,15 @@ cds.on('bootstrap', (app: any) => {
 
 ### Entity not found / `501 Not Implemented`
 
-**Symptom:** `GET /soap/BP/BusinessPartner` returns `501` or the entity is missing from the service document.
+**Symptom:** `GET /soap/bp/BusinessPartner` returns `404` (no route) or `501` (no adapter class).
 
-**Cause:** The loader skips entities without `@Soap.operation`. Check that:
+**Cause:** The loader skips entities without `@Soap.operation`, and a request fails with 501 when no adapter class was found for the entity. Check that:
 
 1. The entity has `@Soap.operation: '<WsdlOperationName>'` in its `.cds` model.
 2. The service is declared with `kind: "soap"` in `cds.requires`.
 3. The `.cds` file is reachable from `cds.model` (i.e., it is `using`-imported somewhere in the model graph).
+4. The URL uses the service's `@path`, or its short name in lower case.
+5. The adapter class resolves (see [Adapter class not loaded](#adapter-class-not-loaded--typeerror--is-not-a-constructor)).
 
 ---
 
@@ -888,7 +881,7 @@ cds.on('bootstrap', (app: any) => {
 
 **Likely causes:**
 
-1. **Wrong `rootResponse`** — the element name in `@Soap.binding.rootResponse` does not match the actual WSDL response wrapper. Open the raw SOAP response (enable `DEBUG=soap` logging) and verify the element name.
+1. **Wrong `rootResponse`** — the path in `@Soap.rootResponse` / `@Soap.binding.rootResponse` (default `<operation>Response`) does not match the actual response. Log the raw rows in a `response()` hook to see the shape.
 2. **Missing `@Soap.path`** — the orchestrator cannot locate the value for an element by name. Add explicit `@Soap.path` annotations.
 3. **Filter not pushed down** — the `request()` hook is not reading the filter fields correctly. Log `payload` inside the hook to inspect.
 
@@ -936,7 +929,7 @@ Set the `DEBUG` environment variable before starting `cds watch`:
 DEBUG=soap cds watch
 ```
 
-This enables per-request logging of: destination resolution, WSDL load, outbound headers (with sensitive values redacted), raw SOAP request/response XML, and filter extraction.
+This enables the `soap` logger's debug output. Payloads that are logged are redacted. It does not log the raw SOAP XML; use a `response()` hook to inspect raw rows.
 
 ---
 
