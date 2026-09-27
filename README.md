@@ -861,6 +861,13 @@ cds.on('bootstrap', (app: any) => {
 
 [↑ Table of Contents](#-table-of-contents)
 
+### Application does not start: `CAPTS_LICENSE_MISSING` / `CAPTS_LICENSE_INVALID` / `CAPTS_LICENSE_EXPIRED`
+
+The licence check of `@cap-ts/soap-adapter` failed in production. The message gives the reason. `MISSING`: `cds.capts.license`
+is not set (check that the `CDS_CAPTS_LICENSE` variable reached the app: `cds env get capts`). `INVALID`: the token was
+changed or truncated, does not grant `@cap-ts/soap-adapter`, or is bound to another Cloud Foundry org or space. `EXPIRED`: the
+grace period is over. Contact SAP-Code-World for a new token. See [Licence](#licence-token).
+
 ### Entity not found / `501 Not Implemented`
 
 **Symptom:** `GET /soap/bp/BusinessPartner` returns `404` (no route) or `501` (no adapter class).
@@ -947,5 +954,39 @@ This enables the `soap` logger's debug output. Payloads that are logged are reda
 [↑ Table of Contents](#-table-of-contents)
 
 This package is provided under the terms of the **SAP-Code-World** [Usage License Agreement](LICENSE).
+
+### Licence token
+
+Using `@cap-ts/soap-adapter` in production needs a licence token from SAP-Code-World. The token is a signed text string. The
+package checks it when the server starts, offline: no call home, no network access.
+
+Set it as `cds.capts.license`. One setting serves every `@cap-ts` package. Keep it out of source control, like any
+other credential:
+
+| Where | How |
+| --- | --- |
+| Environment variable (Cloud Foundry, Kyma, local shell) | `CDS_CAPTS_LICENSE=<token>`, for example `cf set-env <app> CDS_CAPTS_LICENSE <token>` or an `mta.yaml` `properties` entry |
+| Kubernetes secret | mount it as `<CDS_CONFIG root>/capts/license` (see CAP's `CDS_CONFIG` directory mode) |
+| Local development | `.cdsrc-private.json`: `{ "capts": { "license": "<token>" } }` |
+
+A licence covers this package only, selected `@cap-ts` packages, or every `@cap-ts` package. Several tokens (for
+example one per package) go into the same setting, separated by spaces or commas, or as a JSON array; the best one for
+each package is used.
+
+What happens:
+
+| Licence state | Production | Not production |
+| --- | --- | --- |
+| Valid | `info` log: licensee, expiry date, licence ID | same |
+| Expires within 30 days | `warn` log | same |
+| Expired, inside the grace period (30 days unless your licence says otherwise) | `error` log; SOAP services keep serving | same |
+| Expired after the grace period, invalid, not granted for this package, or not set | the application does not start: error `CAPTS_LICENSE_EXPIRED`, `CAPTS_LICENSE_INVALID` or `CAPTS_LICENSE_MISSING` with the reason | `warn` log; the package runs in evaluation mode |
+
+- **Production** means the cds profile `production` (`NODE_ENV=production`, which the Cloud Foundry Node.js buildpack
+  sets) or running on Cloud Foundry.
+- The check only runs when at least one `cds.requires` entry has `kind: "soap"`. An app that only has the package
+  installed, for example as a peer of `@cap-ts/esi`, needs no licence.
+- A licence can be bound to Cloud Foundry org or space GUIDs. It is then only valid in those orgs or spaces.
+- A running application is never stopped. Renewing means setting the new token and restarting the app.
 
 © 2025 **SAP-Code-World**. All rights reserved.
