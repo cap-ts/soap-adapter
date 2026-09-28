@@ -294,7 +294,7 @@ declare class ApplicationService {
      * 6. Calls `init()` so the subclass can register its hooks.
      *
      * @param {CdsEntity} entity - CSN entity reflection for the entity this
-     *   adapter serves (e.g. `srv.entities.BusinessUserSet`).
+     *   adapter serves (e.g. `srv.entities.CustomerSet`).
      * @param {Request} req - The current CAP request.  Available as
      *   `this.req` inside all hook callbacks.
      * @param {TraceContext} traceContext - Correlation IDs for structured
