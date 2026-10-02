@@ -9,6 +9,16 @@
 
 `@cap-ts/soap-adapter` turns a WSDL operation into a CAP entity: consumers declare the entity in `.cds` with a small set of `@Soap.*` annotations, ship an adapter subclass that shapes the SOAP request/response, and the plugin does the rest — CSRF-safe HTTP routing (`/soap/**`), destination + JWT propagation, filter push-down, XML build/parse, response flattening, and an OData-style JSON response (`@odata.context`, `@odata.count`, `@odata.nextLink`). It is read only: writes are rejected with 405.
 
+| Area | Features |
+| --- | --- |
+| Model | Seven typed CDS annotations (`@Soap`, `@Soap.operation`, `@Soap.binding`, `@Soap.rootResponse`, `@Soap.path`, `@Soap.filterRestriction`, `@Soap.adapter`), checked by `cds compile` |
+| Adapter hooks | `header()` (SOAP headers), `request()` (input message, push-down sentinels), `response()` (raw rows), `mock()` (offline) |
+| HTTP | `GET /soap/<path>/<Entity>` and `/<Entity>/<key>` with `$select`, `$filter`, `$orderby`, `$top`, `$skip` / `$skiptoken`, `$count`; OData-style JSON; `@requires` enforced |
+| Queries | Fail-closed `$filter` parser, mandatory filter fields, one SOAP call per key value (`multipleSelection: false`), push-down or bounded in-memory evaluation with `@odata.nextLink` |
+| In process | The SOAP service is a CAP service: other services read it with `srv.run(SELECT ...)` or `soap.read(...)` (e.g. `@cap-ts/remote-service-adapter`) |
+| Connectivity | BTP destinations per request and tenant, JWT-based lookup, client cache per service / destination / endpoint / tenant |
+| Security | Inbound credentials never forwarded, forbidden SOAP header keys stripped, redacted logs, WSDL path sandbox, generic 5xx messages |
+
 ---
 
 ## 📑 Table of Contents
@@ -17,12 +27,15 @@
 📖 [Usage Guidelines](#-usage-guidelines)\
 ⚡ [Quick start (5 minutes)](#-quick-start-5-minutes)\
 📝 [CDS annotation reference (`@Soap.*`)](#-cds-annotation-reference-soap)\
+🌐 [HTTP endpoints and query options](#-http-endpoints-and-query-options)\
+🔗 [Using SOAP entities from other services](#-using-soap-entities-from-other-services)\
 🔌 [Adapter class API (`soap.ApplicationService`)](#-adapter-class-api-soapapplicationservice)\
 🧰 [Utility API (`soap.*`)](#-utility-api-soap)\
 ⚙️ [Configuration (`cds.env.soap.*`)](#️-configuration-cdsenvsoap)\
 🏢 [Multi-tenant destinations & JWT propagation](#-multi-tenant-destinations--jwt-propagation)\
 🔍 [Filter push-down & `filterRestriction`](#-filter-push-down--filterrestriction)\
 🔒 [Security guarantees](#-security-guarantees)\
+🚦 [Errors and results](#-errors-and-results)\
 🛠️ [Troubleshooting](#️-troubleshooting)\
 💬 [Support & feedback](#-support--feedback)\
 📄 [License](#-license)
@@ -198,11 +211,23 @@ its short name in lower case:
   system query option is a 400). `@requires` on the service is enforced.
 - `/soap/bp/BusinessPartner/<key>` — a read by key (404 when nothing comes back).
 
+Details: [HTTP endpoints and query options](#-http-endpoints-and-query-options).
+
 ---
 
 ## 📝 CDS annotation reference (`@Soap.*`)
 
 [↑ Table of Contents](#-table-of-contents)
+
+| Annotation | On | Required | Purpose |
+| --- | --- | --- | --- |
+| `@Soap` | service | No | Marks the service in the model (documentation; `kind: 'soap'` in `cds.requires` is what activates it). |
+| `@Soap.operation: '<Operation>'` | entity | **Yes** | WSDL operation that serves reads. Entities without it are ignored. |
+| `@Soap.binding: { rootRequest, rootResponse }` | entity | No | `rootResponse`: dot path of the response element holding the rows. `rootRequest`: documentation only. |
+| `@Soap.rootResponse: '<path>'` | entity | No | Same as `binding.rootResponse`, takes precedence. Default `<operation>Response`. |
+| `@Soap.path: '<dot.path>'` | element | No | Where the element's value sits in one response entry. Default: the element name. |
+| `@Soap.filterRestriction: { mandatoryFields, multipleSelection }` | entity | No | Fields `$filter` must contain (400 otherwise); `multipleSelection: false` = one SOAP call per key value. |
+| `@Soap.adapter: '<npm specifier>'` | entity / service | No | Adapter module, instead of the `lib/<Service>.{ts,js}` convention. |
 
 All seven annotations (`@Soap` and the six `@Soap.*` below) are declared in the package's `index.cds` under the single canonical top-level namespace. `@Soap` (Boolean) only marks a service in the model; what makes a service SOAP-backed at runtime is `kind: "soap"` in `cds.requires`. They are real CDS typed annotations, so `cds compile` type-checks consumer usage — typos and shape mismatches surface at build time, not at first request.
 
@@ -388,6 +413,14 @@ async init() {
 - **Last writer wins.** If multiple `request()` handlers are registered for the same entity, the sentinel is read from the final merged payload after all handlers have run.
 - **Feature-flagged.** Set `cds.env.soap.pushFilters: false` to force the in-memory path even when the sentinel is present.
 - **No separate hook needed.** There is no `translateFilter` method to override — the `request()` hook is the single integration point for both payload building and push-down signalling.
+
+### `__skipPagination` sentinel
+
+Return `__skipPagination: true` on the `request()` payload (stripped before dispatch like `__filterPushedDown`) when
+the in-memory evaluation must not cut the result to one page: `$filter` / `$orderby` still run in memory, but no page
+cap and no `@odata.nextLink` apply. Callers inside the application can ask for the same with
+`SELECT.__skipPagination = true` on the query (used by `@cap-ts/remote-service-adapter` for association reads that
+need every row).
 
 **When push-down is not set** (sentinel absent or `pushFilters: false`), the runtime falls back to the bounded in-memory evaluator (`cds.env.soap.pageSize`, default `1000`, capped at `5000`) and emits an `@odata.nextLink` header when the result exceeds one page.
 
@@ -669,6 +702,13 @@ Per-service configuration lives in `cds.requires.<ServiceName>`:
 | `credentials.destination` | `string` | **Yes** | Destination name, resolved via `@sap-cloud-sdk/connectivity` (BTP destination service, or the `destinations` environment variable locally). Without it the service fails with `No 'credentials.destination' configured`. |
 | `credentials.path` | `string` | No | Path appended to the destination URL to form the SOAP endpoint. |
 
+The service is looked up in `cds.requires` by its **short name** (the last segment of the service name).
+
+**Boot validation.** At `served` every `kind: 'soap'` service is checked: `wsdl` set, the file exists, and the path stays
+inside `cds.root` (a `../` escape is rejected; `.wsdl` is appended when missing). A failing service is logged
+(`[soap] ... — service disabled.`) and the rest of the application starts; with `cds.env.features.strict: true` boot
+fails instead (use it in CI).
+
 ---
 
 ## 🏢 Multi-tenant destinations & JWT propagation
@@ -757,14 +797,14 @@ See [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel) for the full c
     mandatoryFields   : [ 'CompanyCode', 'FiscalYear' ],
     multipleSelection : false
 }
-entity e_FinancialDocument { … }
+entity FinancialDocuments { … }
 ```
 
 **`mandatoryFields`** — array of OData property names that MUST be present in `$filter`. A request missing any mandatory field is rejected with HTTP 400 and a diagnostic message:
 
 ```http
-GET /soap/FI/e_FinancialDocument?$filter=FiscalYear eq '2025'
-→ 400 Bad Request: Filter field 'CompanyCode' is mandatory for e_FinancialDocument
+GET /soap/fi/FinancialDocuments?$filter=FiscalYear eq '2025'
+→ 400 { "error": { "code": "MISSING_MANDATORY_FILTER", "message": "Mandatory filter field(s) missing: CompanyCode" } }
 ```
 
 **`multipleSelection`** — controls fan-out behaviour:
@@ -780,6 +820,54 @@ GET /soap/FI/e_FinancialDocument?$filter=FiscalYear eq '2025'
 
 The `/soap/**` routes do not accept `$expand` (it is a 400). To combine SOAP entities with others, read them through
 another service, for example `@cap-ts/remote-service-adapter`, which expands associations across backends.
+
+---
+
+## 🌐 HTTP endpoints and query options
+
+[↑ Table of Contents](#-table-of-contents)
+
+Per SOAP entity four GET routes are mounted (`<path>` = the service's `@path`, else its short name in lower case):
+
+| Route | Answer |
+| --- | --- |
+| `/soap/<path>/<Entity>` and `/<path>/<Entity>` | `{ "@odata.context", "@odata.count"?, "@odata.nextLink"?, "value": [...] }` |
+| `/soap/<path>/<Entity>/<key>` and `/<path>/<Entity>/<key>` | `{ "@odata.context": "...$entity", ...row }`; 404 `Entity instance not found.` without a row. The key value is compared with the first key element. |
+
+Responses are `application/json;odata.metadata=minimal`. Only GET is mounted; writes through the CAP service are 405.
+
+| Query option | Behavior |
+| --- | --- |
+| `$filter` | Parsed by a fail-closed parser into CQN: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `and`, `or`, `not`, `in (...)`, parentheses, string, number (also negative), ISO date-time, boolean and `null` literals, and the functions `startswith`, `endswith`, `contains`, `tolower`, `toupper`, `length`, `concat`, `substring`. Anything else (unknown characters or functions, a function on the left of a comparison, GUID literals, unterminated strings) is a 400, never ignored. `'It''s'` keeps the doubled quote. |
+| `$select` | Projection of the answer. |
+| `$orderby`, `$top`, `$skip` | Applied in memory unless the adapter pushed them down (`__filterPushedDown`). |
+| `$skiptoken` | Treated as `$skip` (so `@odata.nextLink` values work). |
+| `$count=true` | `@odata.count`: the total before paging. |
+| `$search` | Accepted and ignored. |
+| `$expand`, `$apply`, `$format`, any other `$` option | 400 `The system query option "<x>" is not supported by soap endpoint.` |
+
+Authentication: when the entity or service has `@requires` (other than `any`), the route runs CAP's auth middleware
+itself (the routes are mounted outside CAP's protocol adapters); no user is 401, a user without one of the roles is 403.
+
+---
+
+## 🔗 Using SOAP entities from other services
+
+[↑ Table of Contents](#-table-of-contents)
+
+The plugin registers each SOAP service as a CAP service (`cds.services.<Name>`), so code in the same application can
+read it like any service:
+
+```js
+const bp = await cds.connect.to('BP');
+const rows = await bp.run(SELECT.from('BP.BusinessPartner').where({ BusinessPartnerID: 'BP001' }));
+```
+
+The same pipeline runs (mandatory filters are checked on the HTTP route only): `request()` hooks, the SOAP call,
+`response()` hooks, `@Soap.path` mapping and the in-memory `$filter` / `$orderby` / paging. For header isolation and
+key de-duplication across nested reads use `soap.read(...)` (below), which creates a fresh request per call. Projections
+over SOAP entities in other services are served by `@cap-ts/remote-service-adapter` (`@remote`), which detects
+`kind: 'soap'` and uses `soap.read`.
 
 ---
 
@@ -854,6 +942,27 @@ cds.on('bootstrap', (app: any) => {
 > ⚠️ The adapter does **not** bundle these packages. Consumers own the security posture of their HTTP surface; the adapter only guarantees that its own `/soap/**` handlers do not leak credentials, cache across tenants, or accept unsanitised filter input (see the guarantees table above).
 
 [↑ Table of Contents](#-table-of-contents)
+
+---
+
+## 🚦 Errors and results
+
+[↑ Table of Contents](#-table-of-contents)
+
+Error bodies are `{ "error": { "code", "message", "@Common.numericSeverity": 4 } }`.
+
+| Situation | Status, code |
+| --- | --- |
+| Unsupported system query option, malformed or unsupported `$filter` | 400 |
+| A `mandatoryFields` field missing in `$filter` | 400 `MISSING_MANDATORY_FILTER` |
+| A second `in (...)` on the key, or `in` combined with `or`, on a `multipleSelection: false` entity | 400 `UNSUPPORTED_MULTI_SELECTION_FILTER` |
+| `@requires` set and no authenticated user / user without the role | 401 / 403 |
+| Read by key without a row | 404 `Entity instance not found.` |
+| CREATE / UPDATE / DELETE | 405 |
+| No adapter class resolved for the entity | 501 |
+| SOAP fault, network or destination error, any other failure | 500 `SOAP integration call failed` (details only in the redacted log) |
+| One fan-out call fails | the whole request fails |
+| Empty answer | `value: []` (`@odata.count: 0` with `$count`) |
 
 ---
 
