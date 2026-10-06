@@ -31,7 +31,7 @@
 🔗 [Using SOAP entities from other services](#-using-soap-entities-from-other-services)\
 🔌 [Adapter class API (`soap.ApplicationService`)](#-adapter-class-api-soapapplicationservice)\
 🧰 [Utility API (`soap.*`)](#-utility-api-soap)\
-⚙️ [Configuration (`cds.env.soap.*`)](#️-configuration-cdsenvsoap)\
+⚙️ [Configuration (`cds.env.query.soap.*`)](#️-configuration-cdsenvquerysoap)\
 🏢 [Multi-tenant destinations & JWT propagation](#-multi-tenant-destinations--jwt-propagation)\
 🔍 [Filter push-down & `filterRestriction`](#-filter-push-down--filterrestriction)\
 🔒 [Security guarantees](#-security-guarantees)\
@@ -292,7 +292,7 @@ entity BusinessPartner { … }
 | Field | Type | Behaviour |
 | ----- | ---- | --------- |
 | `mandatoryFields` | `array of String` | Property names that MUST appear in `$filter` for the request to be accepted. Missing fields raise a 400 with a diagnostic message that names the field. |
-| `multipleSelection` | `Boolean` (default: not set) | Set it to `false` when the SOAP operation accepts only one key value per call. The runtime then expands a `$filter` with `<first key> in (a,b,c)` into one SOAP call per value (in batches of `cds.env.soap.multiSelectionConcurrency`, default 5) and merges the results. A second `in(…)` on the key, or `in(…)` combined with `or`, is a 400 (`UNSUPPORTED_MULTI_SELECTION_FILTER`). When `true` or not set, nothing is expanded and the `request()` hook receives the `in(…)` as is. |
+| `multipleSelection` | `Boolean` (default: not set) | Set it to `false` when the SOAP operation accepts only one key value per call. The runtime then expands a `$filter` with `<first key> in (a,b,c)` into one SOAP call per value (in batches of `cds.env.query.soap.multiSelectionConcurrency`, default 5) and merges the results. A second `in(…)` on the key, or `in(…)` combined with `or`, is a 400 (`UNSUPPORTED_MULTI_SELECTION_FILTER`). When `true` or not set, nothing is expanded and the `request()` hook receives the `in(…)` as is. |
 
 See § [Filter push-down & `filterRestriction`](#-filter-push-down--filterrestriction) below.
 
@@ -411,7 +411,7 @@ async init() {
 
 - **Sentinel is stripped before SOAP dispatch.** The `__filterPushedDown` key is never forwarded to the backend; the runtime deletes it from a shallow clone of the payload.
 - **Last writer wins.** If multiple `request()` handlers are registered for the same entity, the sentinel is read from the final merged payload after all handlers have run.
-- **Feature-flagged.** Set `cds.env.soap.pushFilters: false` to force the in-memory path even when the sentinel is present.
+- **Feature-flagged.** Set `cds.env.query.soap.pushFilters: false` to force the in-memory path even when the sentinel is present.
 - **No separate hook needed.** There is no `translateFilter` method to override — the `request()` hook is the single integration point for both payload building and push-down signalling.
 
 ### `__skipPagination` sentinel
@@ -422,7 +422,7 @@ cap and no `@odata.nextLink` apply. Callers inside the application can ask for t
 `SELECT.__skipPagination = true` on the query (used by `@cap-ts/remote-service-adapter` for association reads that
 need every row).
 
-**When push-down is not set** (sentinel absent or `pushFilters: false`), the runtime falls back to the bounded in-memory evaluator (`cds.env.soap.pageSize`, default `1000`, capped at `5000`) and emits an `@odata.nextLink` header when the result exceeds one page.
+**When push-down is not set** (sentinel absent or `pushFilters: false`), the runtime falls back to the bounded in-memory evaluator (`cds.env.query.soap.pageSize`, default `1000`, capped at `5000`) and emits an `@odata.nextLink` header when the result exceeds one page.
 
 ### `this.mock(entity, fn)` — offline / test mock
 
@@ -660,23 +660,27 @@ Available types: `soap.ReadOptions`, `soap.SoapService`, `soap.CdsEntityDef`, `s
 
 ---
 
-## ⚙️ Configuration (`cds.env.soap.*`)
+## ⚙️ Configuration (`cds.env.query.soap.*`)
 
 [↑ Table of Contents](#-table-of-contents)
 
-Global runtime knobs live under `cds.env.soap` (i.e., the `cds.soap` key in `package.json` / `.cdsrc.json`).
+Global runtime knobs live under `cds.env.query.soap` (the `cds.query.soap` key in `package.json` / `.cdsrc.json`), next to CAP's own `cds.query.limit`.
 
 ```json
 {
   "cds": {
-    "soap": {
-      "pushFilters": true,
-      "pageSize": 1000,
-      "multiSelectionConcurrency": 5,
-      "idempotency": {
-        "enabled": false,
-        "ttl": 300000,
-        "maxEntries": 1000
+    "query": {
+      "soap": {
+        "pushFilters": true,
+        "pageSize": 1000,
+        "multiSelectionConcurrency": 5,
+        "maxConcurrent": 50,
+        "idempotency": {
+          "enabled": false,
+          "ttlMs": 900000,
+          "maxEntries": 10000,
+          "allowMissing": true
+        }
       }
     }
   }
@@ -685,13 +689,14 @@ Global runtime knobs live under `cds.env.soap` (i.e., the `cds.soap` key in `pac
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `soap.multiSelectionConcurrency` | `number` | `5` | Batch size for the fan-out of `multipleSelection: false` entities: that many SOAP calls run in parallel, batch after batch. |
-| `soap.maxConcurrent` | `number` | `50` | Reserved. A per-destination `p-limit` pool is prepared from it, but the request path does not use it yet. |
-| `soap.pushFilters` | `boolean` | `true` | Enables the [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel). Set to `false` to force the in-memory `$filter` / `$orderby` / `$top` / `$skip` evaluator even when a `request()` hook sets the sentinel — useful for A/B testing or when a push-down implementation is suspected of misbehaving. |
-| `soap.pageSize` | `number` | `1000` | Default page size for the bounded in-memory fallback when the adapter does **not** set the `__filterPushedDown` sentinel (or when `pushFilters: false`). When the filtered result exceeds one page, the runtime emits an `@odata.nextLink` header and logs a one-time-per-service warning. Hard-capped at `5000` regardless of override. |
-| `soap.idempotency.enabled` | `boolean` | `false` | Reserved for write-handler support, which is not shipped: the adapter is read only, so this has no effect today. |
-| `soap.idempotency.ttl` | `number` (ms) | `300000` | Cache TTL for idempotency keys (5 minutes). |
-| `soap.idempotency.maxEntries` | `number` | `1000` | LRU eviction threshold for the idempotency cache. |
+| `query.soap.multiSelectionConcurrency` | `number` | `5` | Batch size for the fan-out of `multipleSelection: false` entities: that many SOAP calls run in parallel, batch after batch. |
+| `query.soap.maxConcurrent` | `number` | `50` | Reserved. A per-destination `p-limit` pool is prepared from it, but the request path does not use it yet. |
+| `query.soap.pushFilters` | `boolean` | `true` | Enables the [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel). Set to `false` to force the in-memory `$filter` / `$orderby` / `$top` / `$skip` evaluator even when a `request()` hook sets the sentinel — useful for A/B testing or when a push-down implementation is suspected of misbehaving. |
+| `query.soap.pageSize` | `number` | `1000` | Default page size for the bounded in-memory fallback when the adapter does **not** set the `__filterPushedDown` sentinel (or when `pushFilters: false`). When the filtered result exceeds one page, the runtime emits an `@odata.nextLink` header and logs a one-time-per-service warning. Hard-capped at `5000` regardless of override. |
+| `query.soap.idempotency.enabled` | `boolean` | `false` | Reserved for write-handler support, which is not shipped: the adapter is read only, so this has no effect today. |
+| `query.soap.idempotency.ttlMs` | `number` (ms) | `900000` | Cache TTL for idempotency keys (15 minutes). |
+| `query.soap.idempotency.maxEntries` | `number` | `10000` | LRU eviction threshold for the idempotency cache. |
+| `query.soap.idempotency.allowMissing` | `boolean` | `true` | Reserved with the rest of `idempotency`: a request without an `X-Idempotency-Key` header is accepted. |
 
 Per-service configuration lives in `cds.requires.<ServiceName>`:
 
@@ -777,7 +782,7 @@ Two paths are supported. **Prefer the opt-in path (A)** for any adapter that can
 **Path A — Opt-in via `__filterPushedDown` sentinel (recommended, since 0.1.6).**
 
 1. The CAP OData layer parses `$filter` into a CQN `WHERE` array.
-2. Your `request()` hook translates the CQN into the SOAP-native selection criteria and **returns the payload with `__filterPushedDown: true`** set on it (when `cds.env.soap.pushFilters !== false`).
+2. Your `request()` hook translates the CQN into the SOAP-native selection criteria and **returns the payload with `__filterPushedDown: true`** set on it (when `cds.env.query.soap.pushFilters !== false`).
 3. The runtime reads and **strips** the sentinel from the payload before the SOAP call — the backend never sees it.
 4. The in-memory `$filter` / `$orderby` / `$top` / `$skip` evaluator is **skipped** — the SOAP response is treated as the authoritative page. Only `$select` projection and `$count` still run.
 
@@ -788,7 +793,7 @@ See [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel) for the full c
 1. The CAP OData layer parses `$filter` into a CQN `WHERE` array.
 2. The `request()` hook reads what it needs from `req.query.SELECT.where` and builds the payload.
 3. For `multipleSelection: false` entities with `<first key> in (…)`, the runtime fans out into one SOAP call per value (batches of `multiSelectionConcurrency`) and merges the results.
-4. The SOAP result is filtered / sorted / paginated **in Node memory** by the in-memory evaluator, bounded by `cds.env.soap.pageSize` (default `1000`, capped at `5000`). When the filtered set exceeds one page, an `@odata.nextLink` is emitted so the client can paginate, and a **one-time-per-service** `in-memory pagination fallback truncated …` warning is logged suggesting migration to Path A.
+4. The SOAP result is filtered / sorted / paginated **in Node memory** by the in-memory evaluator, bounded by `cds.env.query.soap.pageSize` (default `1000`, capped at `5000`). When the filtered set exceeds one page, an `@odata.nextLink` is emitted so the client can paginate, and a **one-time-per-service** `in-memory pagination fallback truncated …` warning is logged suggesting migration to Path A.
 
 ### `@Soap.filterRestriction` reference
 
@@ -970,12 +975,14 @@ Error bodies are `{ "error": { "code", "message", "@Common.numericSeverity": 4 }
 
 [↑ Table of Contents](#-table-of-contents)
 
+<!--
 ### Application does not start: `CAPTS_LICENSE_MISSING` / `CAPTS_LICENSE_INVALID` / `CAPTS_LICENSE_EXPIRED`
 
 The licence check of `@cap-ts/soap-adapter` failed in production. The message gives the reason. `MISSING`: `cds.capts.license`
 is not set (check that the `CDS_CAPTS_LICENSE` variable reached the app: `cds env get capts`). `INVALID`: the token was
 changed or truncated, does not grant `@cap-ts/soap-adapter`, or is bound to another Cloud Foundry org or space. `EXPIRED`: the
 grace period is over. Contact SAP-Code-World for a new token. See [Licence](#licence-token).
+-->
 
 ### Entity not found / `501 Not Implemented`
 
@@ -1064,7 +1071,7 @@ This enables the `soap` logger's debug output. Payloads that are logged are reda
 [↑ Table of Contents](#-table-of-contents)
 
 This package is provided under the terms of the **SAP-Code-World** [Usage License Agreement](LICENSE).
-
+<!--
 ### Licence token
 
 Using `@cap-ts/soap-adapter` in production needs a licence token from SAP-Code-World. The token is a signed text string. The
@@ -1098,5 +1105,5 @@ What happens:
   installed needs no licence.
 - A licence can be bound to Cloud Foundry org or space GUIDs. It is then only valid in those orgs or spaces.
 - A running application is never stopped. Renewing means setting the new token and restarting the app.
-
+-->
 © 2025 **SAP-Code-World**. All rights reserved.
