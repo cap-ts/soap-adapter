@@ -53,13 +53,12 @@ annotation Soap.filterRestriction {
 };
 
 /**
- * npm specifier of the adapter module that implements the request /
- * response / mock / header hooks for this service or entity. Resolved via
- * `require.resolve(spec, { paths: [cds.root] })` — unblocks monorepo reuse
- * (adapter class shipped from a sibling package) and works with pre-
- * compiled CSN where `$location.file` is unavailable. When set on both an
- * entity and its parent service, the entity-level value wins. When
- * unset, the loader falls back to the filesystem convention
- * `<cds-dir>/lib/<ServiceShortName>.{ts,js}`.
+ * Service only: the module of the service's adapter class (a subclass of
+ * `soap.Service`), as a path relative to the project root (with or without
+ * `./`, without extension) or a package specifier resolved from the project
+ * root. It comes before `cds.requires.<Service>.impl` and the file
+ * convention `<Service>.{ts,js}` in the folder of the service's `.cds` file
+ * (`@source` of a compiled model), its `lib/` or its `handlers/` folder.
+ * On an entity it stops the start: the adapter class is the service.
  */
 annotation Soap.adapter : String;

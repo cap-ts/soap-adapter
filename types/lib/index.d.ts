@@ -2,37 +2,24 @@
  * @module @cap-ts/soap-adapter/lib
  * @description Public API surface of the `@cap-ts/soap-adapter` library.
  *
- * Exports {@link ApplicationService} — the abstract base class that every
- * per-entity SOAP adapter must extend — along with {@link FORBIDDEN_SOAP_HEADERS}
- * and a set of re-exported utilities (`createRequest`, `getEntityKeyFields`,
- * `dedupByKeys`, `isSoapService`, `read`).
+ * Exports {@link Service} — the CAP service class that every SOAP adapter
+ * extends — along with {@link FORBIDDEN_SOAP_HEADERS} and a set of re-exported
+ * utilities (`createRequest`, `getEntityKeyFields`, `dedupByKeys`,
+ * `isSoapService`, `read`).
  *
- * The loader (`_loader/index`) discovers subclasses by filename convention,
- * instantiates them per request, and drives them via the orchestrator
- * (`_orchestrator/index`).
+ * The loader (`_loader/index`) resolves the subclass of a SOAP service
+ * (`@Soap.adapter`, `cds.requires.<Service>.impl` or the file convention),
+ * constructs it once as the CAP service and awaits its `init()`.
  *
- * @see {@link ApplicationService}
+ * @see {@link Service}
  * @see {@link FORBIDDEN_SOAP_HEADERS}
  */
-import type { Request } from '@sap/cds';
+import type { Request, Service as CdsService } from '@sap/cds';
 /**
- * Correlation / tracing identifiers forwarded to every hook invocation so
- * that adapter code can emit structured log lines without having to
- * reconstruct the context from the raw CAP request.
- *
- * @interface TraceContext
- * @property {string} correlationId - Platform-level correlation ID (e.g.
- *   `x-vcap-request-id` or `x-correlation-id` from the inbound request).
- * @property {string} user - The authenticated user identifier, typically
- *   `req.user.id` as resolved by CAP's authentication middleware.
- * @property {string} timestamp - ISO-8601 timestamp captured at the start
- *   of the request, used for log ordering and latency calculations.
+ * The internal CAP service that runs the READ pipeline (`_base`). Typed as `cds.Service` so the published
+ * declarations stay self-contained.
  */
-export interface TraceContext {
-    correlationId: string;
-    user: string;
-    timestamp: string;
-}
+declare const BaseService: typeof CdsService;
 /**
  * Minimal shape of a CAP CSN entity reflection object as seen at runtime.
  * The full `cds.linked` entity carries many more fields; only the subset
@@ -46,7 +33,7 @@ export interface TraceContext {
  * @property {SoapBindingConfig} [@Soap.binding] - Optional SOAP binding
  *   annotation placed on the entity in the `.cds` model.
  * @property {{ name: string }} parent - The parent service or namespace
- *   object; `parent.name` is used to look up `cds.services[parentName]`.
+ *   object.
  */
 export interface CdsEntity {
     name: string;
@@ -72,15 +59,12 @@ export interface CdsEntityElement {
     [key: string]: unknown;
 }
 /**
- * Value of the `@Soap.binding` annotation on a CDS entity.  Populated by
- * the loader after it resolves the adapter class.
+ * Value of the `@Soap.binding` annotation on a CDS entity, as the loader
+ * assembles it when the service starts.
  *
  * @interface SoapBindingConfig
  * @property {string} operation - SOAP operation name (WSDL `<operation>`),
  *   e.g. `'GetBusinessPartnerCollection'`.
- * @property {new (entity: CdsEntity, req: Request, trace: TraceContext) => BaseAdapterInstance} [resolvedAdapterClass]
- *   - The adapter subclass constructor resolved by the loader.  Absent until
- *   the loader has completed its discovery pass.
  * @property {string} [rootRequest] - Optional XPath root element to wrap
  *   the outbound SOAP request payload in.
  * @property {string} [rootResponse] - Optional XPath root element to unwrap
@@ -88,10 +72,16 @@ export interface CdsEntityElement {
  */
 export interface SoapBindingConfig {
     operation: string;
-    resolvedAdapterClass?: new (entity: CdsEntity, req: Request, trace: TraceContext) => BaseAdapterInstance;
     rootRequest?: string;
     rootResponse?: string;
 }
+/**
+ * The entity a hook is registered for: its name, qualified (`'ext.BusinessPartner'`) or not (`'BusinessPartner'`), or
+ * any object with a `name`, such as an entity of `this.entities` (CAP's entity type) or a {@link CdsEntity}.
+ */
+export type HookTarget = string | {
+    name: string;
+};
 /**
  * A single SOAP header entry.  Either a static object passed directly to
  * `header()` or the resolved return value of a `SoapHeaderEvaluator`
@@ -112,30 +102,6 @@ export interface SoapHeaderObject {
     [key: string]: unknown;
 }
 /**
- * Minimal structural contract that every `ApplicationService` instance must
- * satisfy so the orchestrator can dispatch hooks without knowing the
- * concrete subclass.
- *
- * @interface BaseAdapterInstance
- * @property {Record<string, Array<Function>>} _requestHandlers - Per-entity
- *   ordered list of outbound payload transformers registered via
- *   {@link ApplicationService#request}.
- * @property {Record<string, Function>} _mockHandlers - Per-entity mock
- *   replacements registered via {@link ApplicationService#mock}.  Only one
- *   mock per entity; the last registration wins.
- * @property {Record<string, Array<SoapHeaderObject|Function>>} _headerHandlers
- *   - Per-entity header providers registered via {@link ApplicationService#header}.
- * @property {Record<string, Array<Function>>} _responseHandlers - Per-entity
- *   ordered list of response mappers registered via
- *   {@link ApplicationService#response}.
- */
-export interface BaseAdapterInstance {
-    _requestHandlers: Record<string, Array<(req: Request, payload: unknown) => Promise<unknown> | unknown>>;
-    _mockHandlers: Record<string, (req: Request, payload: unknown) => Promise<unknown>>;
-    _headerHandlers: Record<string, Array<SoapHeaderObject | ((req: Request, payload: unknown) => Promise<SoapHeaderObject> | SoapHeaderObject)>>;
-    _responseHandlers: Record<string, Array<(req: Request, rows: object[]) => Promise<object[]> | object[]>>;
-}
-/**
  * Frozen, read-only list of HTTP header names that must **never** flow from
  * an inbound CAP request into an outbound SOAP call.
  *
@@ -151,105 +117,82 @@ export interface BaseAdapterInstance {
  * - **Security tokens**: `x-csrf-token`, `sec-websocket-key`,
  *   `sec-websocket-accept`.
  *
- * The list is exposed as `ApplicationService.FORBIDDEN_SOAP_HEADERS` so
+ * The list is exposed as `Service.FORBIDDEN_SOAP_HEADERS` so
  * consumers can inspect it.  It is frozen; mutating it will throw in strict
  * mode.  To extend it, clone the array and add your own entries.
  *
- * @see {@link ApplicationService.stripSensitiveHeaders}
+ * @see {@link Service.stripSensitiveHeaders}
  */
 declare const FORBIDDEN_SOAP_HEADERS: readonly string[];
 /**
- * Abstract base class for per-entity SOAP adapters.
+ * The CAP service of a SOAP web service (`cds.requires.<Service>.kind: 'soap'`).
  *
- * Consumers subclass this, override {@link ApplicationService#init} to
- * register any combination of {@link ApplicationService#header},
- * {@link ApplicationService#request}, {@link ApplicationService#mock}, and
- * {@link ApplicationService#response} hooks, then export the subclass from a
- * file named `<EntityShortName>.js` or `<EntityShortName>.ts` placed next to
- * the service's `.cds` file.
+ * Consumers subclass it once per SOAP service, register their hooks
+ * ({@link Service#header}, {@link Service#request}, {@link Service#mock},
+ * {@link Service#response}) in `init()` and end `init()` with
+ * `await super.init()`, which registers the READ pipeline. The class is found
+ * through `@Soap.adapter` on the service, `cds.requires.<Service>.impl`, or the
+ * file `<Service>.js` / `<Service>.ts` in the folder of the service's `.cds`
+ * file, its `lib/` or its `handlers/` sub-folder.
  *
  * **Contract:**
- * - **One instance per request.** Do not cache request-scoped state on
- *   `this` across requests.  `entity`, `req`, and `traceContext` are
- *   populated fresh for every invocation.
- * - **`init()` is called once, from the constructor**, after the request
- *   fields are populated.  Register all hooks there.
+ * - **One instance per service**, constructed by the plugin (or by CAP) like
+ *   any CAP service: `new (name, model, options)`, then `await init()`. Keep no
+ *   request state on `this`; every hook gets the current request as `req`.
+ * - **CAP handlers work as usual**: `this.before`, `this.on` and `this.after`
+ *   registered before `await super.init()` run around (or instead of) the SOAP
+ *   READ pipeline; call `next()` in an `on` handler to reach it.
  * - **Hooks are dispatched by unqualified entity short-name** (e.g.
- *   `'BusinessPartner'`, not `'ext.BusinessPartner'`).  The `targets`
+ *   `'BusinessPartner'`, not `'ext.BusinessPartner'`). The `targets`
  *   parameter of each registration method accepts strings, CSN entity
  *   objects, arrays of either, or comma-separated strings.
  *
- * @abstract
  * @example
- * // Minimal adapter for a "ProductSet" entity:
- * class ProductSet extends ApplicationService {
- *     init() {
+ * // srv/external/lib/BusinessPartnerService.js
+ * class BusinessPartnerService extends soap.Service {
+ *     async init() {
  *         this.request('ProductSet', async (req) => ({
  *             ProductID: req.data.ID,
  *         }));
  *         this.response('ProductSet', (req, rows) =>
  *             rows.map(r => ({ ...r, _source: 'soap' }))
  *         );
+ *         await super.init();
  *     }
  * }
- * module.exports = { ProductSet };
+ * module.exports = BusinessPartnerService;
  */
-declare class ApplicationService {
+declare class Service extends BaseService {
     /**
      * Frozen array of HTTP header names that must never be forwarded to a
-     * SOAP backend.  Used by {@link ApplicationService.stripSensitiveHeaders}.
+     * SOAP backend.  Used by {@link Service.stripSensitiveHeaders}.
      * @static
      * @readonly
      * @public
      */
     static readonly FORBIDDEN_SOAP_HEADERS: readonly string[];
     /**
-     * CSN entity reflection object for the entity this adapter instance
-     * serves.  Populated by the constructor before `init()` is called.
-     * @public
-     */
-    entity: CdsEntity;
-    /**
-     * The current CAP request.  Available as `this.req` inside all hooks.
-     * @public
-     */
-    req: Request;
-    /**
-     * Correlation / tracing identifiers forwarded from the orchestrator.
-     * Forwarded to every hook invocation for structured logging.
-     * @public
-     */
-    traceContext: TraceContext;
-    /**
-     * All entities exposed by the parent CAP service, keyed by unqualified
-     * short-name.  Populated automatically from `cds.services[parentName].entities`
-     * in the constructor.  Empty object `{}` when the parent service cannot
-     * be resolved (e.g. in unit tests that do not boot a full CAP server).
-     * @public
-     */
-    entities: Record<string, CdsEntity>;
-    /**
      * Per-entity ordered list of outbound payload transformer functions
-     * registered via {@link ApplicationService#request}.
+     * registered via {@link Service#request}.
      * @protected
      */
     protected _requestHandlers: Record<string, Array<(req: Request, payload: unknown) => Promise<unknown> | unknown>>;
     /**
      * Per-entity ordered list of response mapper functions registered via
-     * {@link ApplicationService#response}.
+     * {@link Service#response}.
      * @protected
      */
     protected _responseHandlers: Record<string, Array<(req: Request, rows: object[]) => Promise<object[]> | object[]>>;
     /**
      * Per-entity mock replacement functions registered via
-     * {@link ApplicationService#mock}.  Only one mock per entity; the last
+     * {@link Service#mock}.  Only one mock per entity; the last
      * registration wins.
      * @protected
      */
     protected _mockHandlers: Record<string, (req: Request, payload: unknown) => Promise<unknown>>;
     /**
      * Per-entity header providers (static objects or evaluator functions)
-     * registered via {@link ApplicationService#header}.
+     * registered via {@link Service#header}.
      * @protected
      */
     protected _headerHandlers: Record<string, Array<SoapHeaderObject | ((req: Request, payload: unknown) => Promise<SoapHeaderObject> | SoapHeaderObject)>>;
@@ -262,7 +205,7 @@ declare class ApplicationService {
      * throwing, so callers can safely pass `req.headers ?? {}` without a
      * guard.
      *
-     * The allowlist is exposed as `ApplicationService.FORBIDDEN_SOAP_HEADERS`
+     * The allowlist is exposed as `Service.FORBIDDEN_SOAP_HEADERS`
      * (frozen).  Consumers can extend it by cloning the array and adding
      * extra entries; mutating the exported constant throws in strict mode.
      *
@@ -273,69 +216,12 @@ declare class ApplicationService {
      * @example
      * // Inside a header() hook:
      * this.header(Entity, (req) =>
-     *     ApplicationService.stripSensitiveHeaders(req.headers ?? {})
+     *     soap.Service.stripSensitiveHeaders(req.headers ?? {})
      * );
      * @static
      * @public
      */
     static stripSensitiveHeaders(headers: Record<string, unknown>): Record<string, unknown>;
-    /**
-     * Initialise the adapter instance for a single CAP request.
-     *
-     * Performs the following steps in order:
-     * 1. Guards against direct instantiation (abstract-class enforcement).
-     * 2. Stores `entity`, `req`, and `traceContext` on `this`.
-     * 3. Initialises the four empty handler registries
-     *    (`_requestHandlers`, `_responseHandlers`, `_mockHandlers`,
-     *    `_headerHandlers`).
-     * 4. Resolves the parent service name from the entity reflection and
-     *    binds `this.entities` from `cds.services[parentName].entities`.
-     * 5. Calls `_superInit()` (framework extension point, currently a no-op).
-     * 6. Calls `init()` so the subclass can register its hooks.
-     *
-     * @param {CdsEntity} entity - CSN entity reflection for the entity this
-     *   adapter serves (e.g. `srv.entities.CustomerSet`).
-     * @param {Request} req - The current CAP request.  Available as
-     *   `this.req` inside all hook callbacks.
-     * @param {TraceContext} traceContext - Correlation IDs for structured
-     *   logs; forwarded to every hook invocation.
-     * @throws {TypeError} If instantiated directly (i.e. `new.target ===
-     *   ApplicationService`) instead of via a concrete subclass.
-     * @public
-     */
-    constructor(entity: CdsEntity, req: Request, traceContext: TraceContext);
-    /**
-     * Framework extension point called by the constructor immediately before
-     * {@link ApplicationService#init}.  Currently a no-op; reserved for
-     * future default initialisation steps (e.g. injecting framework-level
-     * hooks or populating shared metadata).
-     *
-     * Subclasses **may** call `super._superInit()` from their own `init()`
-     * for forward-compatibility, but nothing depends on it today.
-     *
-     * Visibility is `protected` (not `private`) because the documented
-     * override contract via `super._superInit()` requires subclass access.
-     *
-     * @returns {void}
-     * @protected
-     */
-    protected _superInit(): void;
-    /**
-     * Lifecycle hook called once from the constructor after all instance
-     * fields are populated.  Subclasses **must** override this method and
-     * use it to register their SOAP hooks via `header()`, `request()`,
-     * `mock()`, and/or `response()`.
-     *
-     * The base implementation throws unconditionally so that a missing
-     * override is caught at instantiation time rather than silently
-     * producing a no-op adapter.
-     *
-     * @abstract
-     * @throws {Error} Always — subclasses must override this method.
-     * @returns {void}
-     * @public
-     */
-    init(): void;
     /**
      * Normalise a `targets` argument into a flat, deduplicated list of
      * unqualified entity short-names used as internal dispatch keys.
@@ -350,7 +236,7 @@ declare class ApplicationService {
      * - **Array** of any of the above → recursively flattened.
      * - `null` / `undefined` / empty string → returns `[]`.
      *
-     * @param {string|CdsEntity|Array<string|CdsEntity>|null|undefined} targets
+     * @param {HookTarget|HookTarget[]|null|undefined} targets
      *   - One or more entity references to normalise.
      * @returns {string[]} Zero or more unqualified entity short-names.
      * @private
@@ -372,9 +258,9 @@ declare class ApplicationService {
      *
      * Common use: strip sensitive inbound HTTP headers before forwarding
      * them to the SOAP backend — see
-     * {@link ApplicationService.stripSensitiveHeaders}.
+     * {@link Service.stripSensitiveHeaders}.
      *
-     * @param {string|CdsEntity|Array<string|CdsEntity>} targets - One or
+     * @param {HookTarget|HookTarget[]} targets - One or
      *   more entity references that this header provider applies to.
      * @param {SoapHeaderObject|((req: Request, payload: *) => Promise<SoapHeaderObject>|SoapHeaderObject)} handler
      *   - Static header object or evaluator function.
@@ -382,7 +268,7 @@ declare class ApplicationService {
      * @returns {void}
      * @public
      */
-    header(targets: string | CdsEntity | Array<string | CdsEntity>, handler: SoapHeaderObject | ((req: Request, payload: unknown) => Promise<SoapHeaderObject> | SoapHeaderObject)): void;
+    header(targets: HookTarget | HookTarget[], handler: SoapHeaderObject | ((req: Request, payload: unknown) => Promise<SoapHeaderObject> | SoapHeaderObject)): void;
     /**
      * Register a hook that shapes the outbound SOAP payload for one or more
      * entities.
@@ -393,7 +279,7 @@ declare class ApplicationService {
      * invocation receives the output of the previous stage.  The same
      * handler reference passed twice is de-duplicated.
      *
-     * @param {string|CdsEntity|Array<string|CdsEntity>} targets - One or
+     * @param {HookTarget|HookTarget[]} targets - One or
      *   more entity references that this request transformer applies to.
      * @param {(req: Request, payload: *) => Promise<*>|*} handler - A
      *   function that receives the CAP request and the current payload, and
@@ -402,7 +288,7 @@ declare class ApplicationService {
      * @returns {void}
      * @public
      */
-    request(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (req: Request, payload: unknown) => Promise<unknown> | unknown): void;
+    request(targets: HookTarget | HookTarget[], handler: (req: Request, payload: unknown) => Promise<unknown> | unknown): void;
     /**
      * Register a mock that fully replaces the SOAP round-trip for the given
      * entity/entities.
@@ -415,7 +301,7 @@ declare class ApplicationService {
      * Intended for unit tests.  Not subject to error sanitisation — any
      * exception thrown by the mock is surfaced as-is to the caller.
      *
-     * @param {string|CdsEntity|Array<string|CdsEntity>} targets - One or
+     * @param {HookTarget|HookTarget[]} targets - One or
      *   more entity references to mock.
      * @param {(req: Request, payload: *) => Promise<*>|*} handler - A
      *   function that receives the CAP request and the current payload, and
@@ -424,7 +310,7 @@ declare class ApplicationService {
      * @returns {void}
      * @public
      */
-    mock(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (req: Request, payload: unknown) => Promise<unknown>): void;
+    mock(targets: HookTarget | HookTarget[], handler: (req: Request, payload: unknown) => Promise<unknown>): void;
     /**
      * Register a hook that maps the raw SOAP response array into the flat
      * row shape that CAP expects for the target entity.
@@ -434,7 +320,7 @@ declare class ApplicationService {
      * `header` and `request`, this hook is **not** de-duplicated —
      * registering the same handler reference twice causes it to run twice.
      *
-     * @param {string|CdsEntity|Array<string|CdsEntity>} targets - One or
+     * @param {HookTarget|HookTarget[]} targets - One or
      *   more entity references that this response mapper applies to.
      * @param {(req: Request, rows: object[]) => Promise<object[]>|object[]} handler
      *   - A function that receives the CAP request and the current row
@@ -443,7 +329,7 @@ declare class ApplicationService {
      * @returns {void}
      * @public
      */
-    response(targets: string | CdsEntity | Array<string | CdsEntity>, handler: (req: Request, rows: object[]) => Promise<object[]> | object[]): void;
+    response(targets: HookTarget | HookTarget[], handler: (req: Request, rows: object[]) => Promise<object[]> | object[]): void;
 }
 /** Options accepted by {@link createRequest}. */
 export interface CreateRequestOptions {
@@ -585,7 +471,7 @@ declare const isSoapService: (serviceName: string) => boolean;
  * One-shot SOAP read: assemble headers, build a real `cds.Request`, dispatch,
  * and deduplicate the result by entity key fields.
  *
- * @param {SoapService} srv - The SOAP `ApplicationService` instance.
+ * @param {SoapService} srv - The SOAP service (`cds.services[<name>]`).
  * @param {string} entity - Key into `srv.entities`; used for key-field resolution and as the request target.
  * @param {Request} req - Inbound CAP request (source of user, params, headers).
  * @param {object} query - CQN SELECT query passed to `createRequest`.
@@ -593,5 +479,5 @@ declare const isSoapService: (serviceName: string) => boolean;
  * @returns {Promise<any[]>} Always an array; `[]` when dispatch returns nothing.
  */
 declare const read: (srv: SoapService, entity: string, req: Request, query: unknown, opts?: ReadOptions) => Promise<unknown[]>;
-export { ApplicationService, FORBIDDEN_SOAP_HEADERS, createRequest, getEntityKeyFields, dedupByKeys, isSoapService, read, };
+export { Service, FORBIDDEN_SOAP_HEADERS, createRequest, getEntityKeyFields, dedupByKeys, isSoapService, read, };
 //# sourceMappingURL=index.d.ts.map

@@ -7,7 +7,7 @@
  *
  * | Symbol | Description |
  * |--------|-------------|
- * | `ApplicationService` | Base class for consumer-side SOAP adapter implementations. |
+ * | `Service` | Base class of a SOAP service: the CAP service class every adapter extends. |
  * | `FORBIDDEN_SOAP_HEADERS` | Frozen list of header names stripped from outbound SOAP requests. |
  * | `createRequest` | Factory for constructing CAP `cds.Request`-compatible objects. |
  * | `getEntityKeyFields` | Extracts the key field names from a CSN entity definition. |
@@ -17,27 +17,26 @@
  *
  * @example
  * ```ts
- * // CAP plugin wiring (package.json cds.requires):
- * // "soap-adapter": { "impl": "@cap-ts/soap-adapter" }
- *
- * // Adapter class usage:
+ * // Adapter class, e.g. srv/external/lib/BusinessPartner.js:
  * const { soap } = require('@cap-ts/soap-adapter');
- * class MyAdapter extends soap.ApplicationService { ... }
+ * module.exports = class BusinessPartner extends soap.Service {
+ *     async init() { this.request(...); await super.init(); }
+ * };
  * ```
  */
 /**
  * The single public namespace of `@cap-ts/soap-adapter`.
  *
  * Every runtime value and every type this package exposes lives here:
- * `soap.ApplicationService`, `soap.FORBIDDEN_SOAP_HEADERS`, `soap.createRequest`,
+ * `soap.Service`, `soap.FORBIDDEN_SOAP_HEADERS`, `soap.createRequest`,
  * `soap.getEntityKeyFields`, `soap.dedupByKeys`, `soap.isSoapService`, `soap.read`,
  * and the types they use (`soap.ReadOptions`, `soap.CdsEntity`,
- * `soap.SoapHeaderObject`, `soap.TraceContext`, `soap.CreateRequestOptions`, ...).
+ * `soap.SoapHeaderObject`, `soap.CreateRequestOptions`, ...).
  *
  * @example
  * ```ts
  * import { soap } from '@cap-ts/soap-adapter';
- * class BP extends soap.ApplicationService { init() { ... } }
+ * class BP extends soap.Service { async init() { ...; await super.init(); } }
  * ```
  */
 export * as soap from './lib';

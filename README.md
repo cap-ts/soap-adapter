@@ -7,12 +7,12 @@
 
 ## 📦 About
 
-`@cap-ts/soap-adapter` turns a WSDL operation into a CAP entity: consumers declare the entity in `.cds` with a small set of `@Soap.*` annotations, ship an adapter subclass that shapes the SOAP request/response, and the plugin does the rest — CSRF-safe HTTP routing (`/soap/**`), destination + JWT propagation, filter push-down, XML build/parse, response flattening, and an OData-style JSON response (`@odata.context`, `@odata.count`, `@odata.nextLink`). It is read only: writes are rejected with 405.
+`@cap-ts/soap-adapter` turns a WSDL operation into a CAP entity: consumers declare the entity in `.cds` with a small set of `@Soap.*` annotations, ship an adapter class (the CAP service of the SOAP service, a subclass of `soap.Service`) that shapes the SOAP request/response, and the plugin does the rest — CSRF-safe HTTP routing (`/soap/**`), destination + JWT propagation, filter push-down, XML build/parse, response flattening, and an OData-style JSON response (`@odata.context`, `@odata.count`, `@odata.nextLink`). It is read only: writes are rejected with 405.
 
 | Area | Features |
 | --- | --- |
 | Model | Seven typed CDS annotations (`@Soap`, `@Soap.operation`, `@Soap.binding`, `@Soap.rootResponse`, `@Soap.path`, `@Soap.filterRestriction`, `@Soap.adapter`), checked by `cds compile` |
-| Adapter hooks | `header()` (SOAP headers), `request()` (input message, push-down sentinels), `response()` (raw rows), `mock()` (offline) |
+| Adapter class | A CAP service per SOAP service (`soap.Service`), found next to its `.cds` file (also in a `cds build` output), through `@Soap.adapter` or `cds.requires.<Service>.impl`; hooks `header()` (SOAP headers), `request()` (input message, push-down sentinels), `response()` (raw rows), `mock()` (offline), plus CAP's `before` / `on` / `after` |
 | HTTP | `GET /soap/<path>/<Entity>` and `/<Entity>/<key>` with `$select`, `$filter`, `$orderby`, `$top`, `$skip` / `$skiptoken`, `$count`; OData-style JSON; `@requires` enforced |
 | Queries | Fail-closed `$filter` parser, mandatory filter fields, one SOAP call per key value (`multipleSelection: false`), push-down or bounded in-memory evaluation with `@odata.nextLink` |
 | In process | The SOAP service is a CAP service: other services read it with `srv.run(SELECT ...)` or `soap.read(...)` (e.g. `@cap-ts/remote-service-adapter`) |
@@ -29,7 +29,7 @@
 📝 [CDS annotation reference (`@Soap.*`)](#-cds-annotation-reference-soap)\
 🌐 [HTTP endpoints and query options](#-http-endpoints-and-query-options)\
 🔗 [Using SOAP entities from other services](#-using-soap-entities-from-other-services)\
-🔌 [Adapter class API (`soap.ApplicationService`)](#-adapter-class-api-soapapplicationservice)\
+🔌 [Adapter class API (`soap.Service`)](#-adapter-class-api-soapservice)\
 🧰 [Utility API (`soap.*`)](#-utility-api-soap)\
 ⚙️ [Configuration (`cds.env.query.soap.*`)](#️-configuration-cdsenvquerysoap)\
 🏢 [Multi-tenant destinations & JWT propagation](#-multi-tenant-destinations--jwt-propagation)\
@@ -97,12 +97,13 @@ Optional but recommended:
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
 │                              ▼                                         │
-│  Consumer srv/lib/BP.js  (extends soap.ApplicationService)             │
+│  Consumer srv/lib/BP.js  (class BP extends soap.Service)               │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ init() {                                                         │  │
+│  │ async init() {                                                   │  │
 │  │   this.header(BusinessPartner, req => ({ Authorization: … }));   │  │
 │  │   this.request(BusinessPartner, (req, payload) => …);            │  │
 │  │   this.response(BusinessPartner, (req, rows) => rows.map(…));    │  │
+│  │   await super.init();                                            │  │
 │  │ }                                                                │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────┘
@@ -116,7 +117,7 @@ Optional but recommended:
         OData-style GET endpoint at `/soap/<service path>/<Entity>`
 ```
 
-Two-word summary: **annotate + subclass**. The plugin needs both — the annotations tell it *what* to route, the subclass tells it *how* to marshal.
+Two-word summary: **annotate + subclass**. The plugin needs both — the annotations tell it *what* to route, the subclass tells it *how* to marshal. The subclass is the CAP service of the SOAP service: one instance, constructed at boot.
 
 ---
 
@@ -131,7 +132,7 @@ srv/
   external/
     BP.cds              ← SOAP service model
     lib/
-      BP.js             ← adapter subclass (of soap.ApplicationService)
+      BP.js             ← adapter class (extends soap.Service)
     wsdl/
       BP.wsdl           ← WSDL cached locally
 package.json
@@ -180,13 +181,13 @@ service BP {
 }
 ```
 
-**3. Ship an adapter subclass at `srv/external/lib/BP.js`.**
+**3. Ship the adapter class at `srv/external/lib/BP.js`** (`.ts` works too; see [Finding the adapter class](#finding-the-adapter-class)).
 
 ```js
 const { soap } = require('@cap-ts/soap-adapter');
 
-class BP extends soap.ApplicationService {
-    init() {
+class BP extends soap.Service {
+    async init() {
         const { BusinessPartner } = this.entities;
 
         this.request(BusinessPartner, (req, payload) => {
@@ -199,12 +200,14 @@ class BP extends soap.ApplicationService {
             // Rows are the raw entries under `rootResponse`; `@Soap.path` mapping runs after this hook.
             return rows.filter(r => r != null);
         });
+
+        await super.init(); // registers the SOAP READ pipeline
     }
 }
 module.exports = BP;
 ```
 
-**4. Start `cds watch`.** The loader mounts GET routes under `/soap` + the service's `@path`, or, without `@path`,
+**4. Start `cds watch`.** The boot line names the class it found (`serving BP { at: ['/soap/bp'], decl: 'srv/external/BP.cds:3', impl: 'srv/external/lib/BP.js' }`). The loader mounts GET routes under `/soap` + the service's `@path`, or, without `@path`,
 its short name in lower case:
 
 - `/soap/bp/BusinessPartner` — the entity set (`$select`, `$count`, `$filter`, `$orderby`, `$top`, `$skip`; any other
@@ -227,7 +230,7 @@ Details: [HTTP endpoints and query options](#-http-endpoints-and-query-options).
 | `@Soap.rootResponse: '<path>'` | entity | No | Same as `binding.rootResponse`, takes precedence. Default `<operation>Response`. |
 | `@Soap.path: '<dot.path>'` | element | No | Where the element's value sits in one response entry. Default: the element name. |
 | `@Soap.filterRestriction: { mandatoryFields, multipleSelection }` | entity | No | Fields `$filter` must contain (400 otherwise); `multipleSelection: false` = one SOAP call per key value. |
-| `@Soap.adapter: '<npm specifier>'` | entity / service | No | Adapter module, instead of the `lib/<Service>.{ts,js}` convention. |
+| `@Soap.adapter: '<module>'` | service | No | Adapter module (a path relative to the project root, or a package), instead of `cds.requires.<Service>.impl` or the file convention. |
 
 All seven annotations (`@Soap` and the six `@Soap.*` below) are declared in the package's `index.cds` under the single canonical top-level namespace. `@Soap` (Boolean) only marks a service in the model; what makes a service SOAP-backed at runtime is `kind: "soap"` in `cds.requires`. They are real CDS typed annotations, so `cds compile` type-checks consumer usage — typos and shape mismatches surface at build time, not at first request.
 
@@ -296,62 +299,116 @@ entity BusinessPartner { … }
 
 See § [Filter push-down & `filterRestriction`](#-filter-push-down--filterrestriction) below.
 
-### `@Soap.adapter` *(scalar, entity- or service-level)* — optional
+### `@Soap.adapter` *(scalar, service-level)* — optional
 
-npm specifier of the adapter module implementing the request / response / mock / header hooks. Resolved at boot.
+The module of the service's adapter class: a path relative to the project root (with or without `./`, without
+extension), or a package specifier resolved from the project root.
 
 ```cds
-@Soap.adapter : '@my-org/bp-adapter'   // sibling package
+@Soap.adapter : '@my-org/bp-adapter'           // sibling package
 service BP { … }
 
-// or, per-entity override:
-@Soap.adapter : '@my-org/bp-adapter/dist/BusinessPartner'
-entity BusinessPartner { … }
+@Soap.adapter : 'srv/adapters/BusinessPartner' // <root>/srv/adapters/BusinessPartner.{js,ts}
+service BP2 { … }
 ```
 
-#### Resolution order
+The adapter class is the service, so `@Soap.adapter` belongs on the service. On an entity it stops the start
+(`@Soap.adapter on entity "<Entity>" is not supported since @cap-ts/soap-adapter 0.4`): register the entity's hooks in
+the service class instead.
 
-1. Entity-level `@Soap.adapter` (if set).
-2. Service-level `@Soap.adapter` (if set).
-3. Filesystem convention: `<dir-of-the-.cds-file>/lib/<ServiceShortName>.{ts,js}`.
+#### Finding the adapter class
 
-On specifier resolution failure the loader logs a diagnostic (`adapter specifier X declared on Y could not be resolved from Z: … — falling back to filesystem convention`) and continues with the filesystem probe. This means: an unresolvable specifier never crashes boot, but you get a loud line to grep for.
+At startup the plugin looks for the class of each SOAP service, in this order:
 
-Use `@Soap.adapter` when:
+1. `@Soap.adapter` on the service.
+2. `impl` in the service's configuration (`cds.requires.<Service>.impl`, CAP's key for a service implementation). Same
+   values as `@Soap.adapter`; profiles apply (`"[production]": { "impl": "…" }`).
+3. The file convention: `<Service>.ts` or `<Service>.js` (`.ts` first) in the folder of the `.cds` file that declares
+   the service, in its `lib/` sub-folder, or in its `handlers/` sub-folder (the folders CAP searches as well).
 
-- The adapter class is shipped from a sibling package in a monorepo.
-- The `.cds` is pre-compiled and `$location.file` is unavailable.
-- You want to compose adapters across packages, or override the convention per entity.
+The folder of rule 3 comes from the service's `@source`, which `cds build` writes into `csn.json`. So the same project
+works under `cds watch` (the `.ts` file next to the `.cds` sources) and when it is served from the build output, e.g.
+`gen/srv` on Cloud Foundry (the compiled `.js` file next to the compiled `.cds` folders).
+
+A configured value that does not resolve is logged as an error and the next source is tried. The class must extend
+`soap.Service`; a class of an earlier version stops the start with a [migration message](#migrating-from-03).
+
+The boot line shows the result:
+
+```text
+serving BP {
+  at: ['/soap/bp'],
+  decl: 'srv/external/BP.cds:3',
+  impl: 'srv/external/lib/BP.js'
+}
+```
+
+When nothing is found, the service still starts, its READs answer `501`, and a warning lists what was tried:
+
+```text
+[soap] no adapter class for BP; tried: @Soap.adapter (none), cds.requires.BP.impl (none), srv/external/{,lib/,handlers/}BP.{ts,js}. Its READs answer 501.
+```
+
+With `"strict": true` in `cds.requires.<Service>` (or `cds.env.features.strict`), a missing class stops the start
+instead, so a broken build is caught at deployment and not at the first request.
 
 ---
 
-## 🔌 Adapter class API (`soap.ApplicationService`)
+## 🔌 Adapter class API (`soap.Service`)
 
 [↑ Table of Contents](#-table-of-contents)
 
-Every SOAP-backed service ships an adapter class that extends `soap.ApplicationService`. The class is instantiated once per service at boot and its `init()` method is called to register per-entity hooks.
+Every SOAP-backed service ships an adapter class that extends `soap.Service`. `soap.Service` is a CAP service
+(`cds.Service`): the plugin constructs the class **once per service** at boot, like CAP constructs any service
+(`new BP(name, model, options)`), and awaits its `init()`. Register the hooks in `init()` and end it with
+`await super.init()`, which registers the SOAP READ pipeline.
 
 ```js
 const { soap } = require('@cap-ts/soap-adapter');
 
-class BP extends soap.ApplicationService {
-    init() {
+class BP extends soap.Service {
+    async init() {
         const { BusinessPartner } = this.entities;
         // register hooks …
+        await super.init();
     }
 }
 module.exports = BP;
 ```
 
-### Constructor properties
+- **No request state on `this`.** One instance serves every request; each hook gets the current request as `req`.
+- **CAP handlers work as usual.** `this.before`, `this.on` and `this.after` registered before `await super.init()`
+  run around the pipeline; an `on('READ', …)` handler runs instead of it unless it calls `next()`.
+- **CAP can construct it too.** The plugin registers `kind: 'soap'` with CAP (`cds.requires.kinds.soap`), so a
+  `cds.connect.to('<Service>')` before the plugin started the service, or a mocked service under `cds watch`, works.
 
-Available inside `init()` via `this.*`:
+### Service properties
+
+Available inside `init()` and the hooks via `this.*` (CAP's service API):
 
 | Property | Type | Description |
 | -------- | ---- | ----------- |
+| `this.name` | `string` | The service name. |
 | `this.entities` | `Record<string, Csn.Entity>` | CSN entity definitions for the service, keyed by entity short name. |
-| `this.model` | `Csn.Model` | Full CSN model for the service. |
-| `this.options` | `object` | Merged `cds.requires.<ServiceName>` config object (wsdl path, credentials, …). |
+| `this.model` | `Csn.Model` | Full CSN model. |
+| `this.options` | `object` | The service's `cds.requires.<ServiceName>` entry (wsdl path, credentials, …). |
+
+### Migrating from 0.3
+
+0.3 constructed `soap.ApplicationService` per request. Since 0.4 the class is the service:
+
+| 0.3 | 0.4 |
+| --- | --- |
+| `class BP extends soap.ApplicationService` | `class BP extends soap.Service` |
+| `init() { … }` | `async init() { …; await super.init(); }` |
+| `this.req`, `this.entity`, `this.traceContext` | the `req` argument of the hook (`req.target`, `req.context.id`) |
+| `@Soap.adapter` on an entity | `@Soap.adapter` on the service, or `cds.requires.<Service>.impl` |
+| `soap.ApplicationService.stripSensitiveHeaders` / `.FORBIDDEN_SOAP_HEADERS` | `soap.Service.stripSensitiveHeaders` / `.FORBIDDEN_SOAP_HEADERS` |
+
+A class that does not extend `soap.Service` stops the start with `the adapter class of SOAP service "<Service>" (<file>)
+does not extend soap.Service`, followed by these steps. An `init()` that does not call `await super.init()` stops the
+start as well (`init() of the adapter class of SOAP service "<Service>" (<file>) does not call "await super.init()"`):
+without it the service has no READ pipeline.
 
 ### `this.header(entity, fn)` — outbound HTTP headers
 
@@ -456,14 +513,14 @@ this.response(BusinessPartner, (req, rows) => {
 - Several `response()` hooks run in registration order, each receiving the previous result. Always return an array:
   a hook that returns `undefined` yields an empty result.
 
-### `soap.ApplicationService.stripSensitiveHeaders(headers)` — static helper
+### `soap.Service.stripSensitiveHeaders(headers)` — static helper
 
 Returns a copy of a header map without the entries that must never reach a backend (auth tokens, session cookies, SAP passport, trace/correlation identifiers). Use it when a `header()` hook builds SOAP headers from a map it did not write itself, such as the inbound request headers:
 
 ```js
 this.header(BusinessPartner, (req) => ({
     // Everything from the inbound request except credentials, cookies and trace ids.
-    ...soap.ApplicationService.stripSensitiveHeaders(req.http?.req?.headers ?? {}),
+    ...soap.Service.stripSensitiveHeaders(req.http?.req?.headers ?? {}),
     TraceID: req.id
 }));
 ```
@@ -497,17 +554,17 @@ Removed header names (case-insensitive):
 | `sec-websocket-key` | WebSocket |
 | `sec-websocket-accept` | WebSocket |
 
-The full list is exposed as the frozen constant `soap.ApplicationService.FORBIDDEN_SOAP_HEADERS` (a `readonly string[]`). Consumers can inspect or extend it:
+The full list is exposed as the frozen constant `soap.Service.FORBIDDEN_SOAP_HEADERS` (a `readonly string[]`). Consumers can inspect or extend it:
 
 ```js
 const { soap } = require('@cap-ts/soap-adapter');
 
 // Inspect the built-in list
-console.log(soap.ApplicationService.FORBIDDEN_SOAP_HEADERS);
+console.log(soap.Service.FORBIDDEN_SOAP_HEADERS);
 
 // Extend with your own headers (create a new Set — do not mutate the frozen array)
 const myForbidden = new Set([
-    ...soap.ApplicationService.FORBIDDEN_SOAP_HEADERS,
+    ...soap.Service.FORBIDDEN_SOAP_HEADERS,
     'x-my-internal-token',
 ]);
 const withoutForbidden = (headers) =>
@@ -522,7 +579,7 @@ this.header(BusinessPartner, (req) => withoutForbidden(req.http?.req?.headers ??
 
 [↑ Table of Contents](#-table-of-contents)
 
-Beyond `ApplicationService`, the package exports a set of standalone utilities available directly on the `soap` namespace. These cover the low-level primitives the orchestrator uses internally — consumers can call them directly when building advanced adapters, testing utilities, or routing logic.
+Beyond `Service`, the package exports a set of standalone utilities available directly on the `soap` namespace. These cover the low-level primitives the orchestrator uses internally — consumers can call them directly when building advanced adapters, testing utilities, or routing logic.
 
 ```js
 const { soap } = require('@cap-ts/soap-adapter');
@@ -567,7 +624,7 @@ One-shot SOAP read: assemble headers, build a real `cds.Request`, dispatch, and 
 
 ```js
 const rows = await soap.read(
-    srv,               // ApplicationService instance
+    srv,               // the SOAP service, e.g. cds.services.BP
     'BusinessPartner', // entity short name (key into srv.entities)
     req,               // inbound CAP request (source of user, params, headers)
     req.query,         // CQN SELECT query
@@ -582,7 +639,7 @@ const rows = await soap.read(
 
 | Parameter | Type | Required | Description |
 | --------- | ---- | -------- | ----------- |
-| `srv` | `ApplicationService` | Yes | The SOAP adapter instance. |
+| `srv` | `soap.SoapService` | Yes | The SOAP service (`cds.services.<Name>`, an instance of its adapter class). |
 | `entity` | `string` | Yes | Unqualified entity short name, e.g. `'BusinessPartner'`. |
 | `req` | `cds.Request` | Yes | Source of `user`, `params`, and `headers`. |
 | `query` | `object` | Yes | CQN SELECT query passed to `createRequest`. |
@@ -649,14 +706,17 @@ Everything the package exposes, values and types, lives under the single `soap` 
 import { soap } from '@cap-ts/soap-adapter';
 
 const opts: soap.ReadOptions = { headers: {} };
-class BP extends soap.ApplicationService {
-    init(): void {
+class BP extends soap.Service {
+    async init(): Promise<void> {
         this.header('BusinessPartner', (req): soap.SoapHeaderObject => ({ value: {} }));
+        await super.init();
     }
 }
 ```
 
-Available types: `soap.ReadOptions`, `soap.SoapService`, `soap.CdsEntityDef`, `soap.CsnEntityDefinition`, `soap.CreateRequestOptions`, `soap.CdsEntity`, `soap.CdsEntityElement`, `soap.SoapBindingConfig`, `soap.SoapHeaderObject`, `soap.TraceContext`, `soap.BaseAdapterInstance`. There is no top-level export besides `soap`.
+Available types: `soap.ReadOptions`, `soap.SoapService`, `soap.CdsEntityDef`, `soap.CsnEntityDefinition`, `soap.CreateRequestOptions`, `soap.CdsEntity`, `soap.CdsEntityElement`, `soap.SoapBindingConfig`, `soap.SoapHeaderObject`, `soap.HookTarget` (what a hook is registered for: an entity name, or an
+object with a `name` such as an entity of `this.entities`). `soap.Service` brings CAP's service types (`this.on`,
+`this.entities`, ...) from `@cap-js/cds-types`. There is no top-level export besides `soap`.
 
 ---
 
@@ -706,6 +766,8 @@ Per-service configuration lives in `cds.requires.<ServiceName>`:
 | `wsdl` | `string` | **Yes** | Path to the WSDL file, relative to `cds.root`. |
 | `credentials.destination` | `string` | **Yes** | Destination name, resolved via `@sap-cloud-sdk/connectivity` (BTP destination service, or the `destinations` environment variable locally). Without it the service fails with `No 'credentials.destination' configured`. |
 | `credentials.path` | `string` | No | Path appended to the destination URL to form the SOAP endpoint. |
+| `impl` | `string` | No | Module of the adapter class: a path relative to the project root, or a package. See [Finding the adapter class](#finding-the-adapter-class). |
+| `strict` | `boolean` | No | `true`: a missing adapter class stops the start instead of a warning and 501 answers. |
 
 The service is looked up in `cds.requires` by its **short name** (the last segment of the service name).
 
@@ -964,7 +1026,8 @@ Error bodies are `{ "error": { "code", "message", "@Common.numericSeverity": 4 }
 | `@requires` set and no authenticated user / user without the role | 401 / 403 |
 | Read by key without a row | 404 `Entity instance not found.` |
 | CREATE / UPDATE / DELETE | 405 |
-| No adapter class resolved for the entity | 501 |
+| No adapter class found for the service | 501 `No adapter class for SOAP service "<Service>" (entity "<Entity>"): see the "[soap] no adapter class" warning in the startup log` |
+| A hook rejects with `req.reject(<status>, <message>)` | that status; the message for 4xx and 501, `SOAP integration call failed` for other 5xx |
 | SOAP fault, network or destination error, any other failure | 500 `SOAP integration call failed` (details only in the redacted log) |
 | One fan-out call fails | the whole request fails |
 | Empty answer | `value: []` (`@odata.count: 0` with `$count`) |
@@ -988,13 +1051,15 @@ grace period is over. Contact SAP-Code-World for a new token. See [Licence](#lic
 
 **Symptom:** `GET /soap/bp/BusinessPartner` returns `404` (no route) or `501` (no adapter class).
 
-**Cause:** The loader skips entities without `@Soap.operation`, and a request fails with 501 when no adapter class was found for the entity. Check that:
+**Cause:** The loader skips entities without `@Soap.operation`, and a request fails with 501 when no adapter class was found for the service. The startup log says what was searched (`[soap] no adapter class for <Service>; tried: …`), and the boot line shows `impl: 'undefined'`. Check that:
 
 1. The entity has `@Soap.operation: '<WsdlOperationName>'` in its `.cds` model.
 2. The service is declared with `kind: "soap"` in `cds.requires`.
 3. The `.cds` file is reachable from `cds.model` (i.e., it is `using`-imported somewhere in the model graph).
 4. The URL uses the service's `@path`, or its short name in lower case.
-5. The adapter class resolves (see [Adapter class not loaded](#adapter-class-not-loaded--typeerror--is-not-a-constructor)).
+5. The adapter class resolves (see [Adapter class not found or not loaded](#adapter-class-not-found-or-not-loaded)). An
+   application served from a build output (`gen/srv`) needs the compiled `.js` file in one of the searched folders of
+   the compiled `.cds` folder structure, or `impl` / `@Soap.adapter` pointing to it.
 
 ---
 
@@ -1016,7 +1081,7 @@ grace period is over. Contact SAP-Code-World for a new token. See [Licence](#lic
 
 **Cause:** You are reading `entity['@Soap.binding']` directly. The CDS compiler serialises struct annotations as **flat leaf CSN keys** (`entity['@Soap.binding.rootRequest']`), not as a nested object. The loader's `readSoapStructAnnotation` helper reassembles these — but only after the `served` event fires.
 
-**Fix:** Read binding via the loader API (available after `cds.on('served', …)`), or use the post-loader entity definition from `this.entities` inside `init()`.
+**Fix:** Read the binding after `cds.on('served', …)`, e.g. from `this.entities` inside a hook (at request time).
 
 ---
 
@@ -1032,13 +1097,16 @@ node -e "const cds = require('@sap/cds'); console.log(cds.root)"
 
 ---
 
-### Adapter class not loaded / `TypeError: … is not a constructor`
+### Adapter class not found or not loaded
 
-**Symptom:** Boot logs `adapter specifier … could not be resolved` or throws on instantiation.
+**Symptom:** Boot logs `[soap] no adapter class for <Service>`, `adapter "…" of @Soap.adapter could not be resolved`,
+`Failed to load adapter at "…"`, or stops with `… does not extend soap.Service`.
 
 **Fix checklist:**
 
-1. The module at the resolved path must `module.exports` the class (not `exports.MyClass`).
+1. The module must export the class as `module.exports` or `default` (not `exports.MyClass`), the class must
+   extend `soap.Service`, and its `init()` must end with `await super.init()` (see
+   [Migrating from 0.3](#migrating-from-03)).
 2. If using TypeScript, something must load `.ts`: `cds watch` / `cds-tsx`, `tsx`, Node 22.18 or later, or `ts-node`
    (`npm i -D ts-node`). The `Failed to load adapter` error of a `.ts` adapter lists these options.
 3. For monorepo sibling packages, ensure the package is listed in `dependencies` and `npm install` has run.
