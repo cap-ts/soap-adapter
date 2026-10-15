@@ -27,7 +27,7 @@ declare const BaseService: typeof CdsService;
  *
  * @interface CdsEntity
  * @property {string} name - Fully qualified entity name, e.g.
- *   `'ext.BusinessPartnerSet'`.
+ *   `'ext.BusinessPartners'`.
  * @property {Record<string, CdsEntityElement>} elements - Map of element
  *   (field) name → element descriptor.
  * @property {SoapBindingConfig} [@Soap.binding] - Optional SOAP binding
@@ -151,10 +151,10 @@ declare const FORBIDDEN_SOAP_HEADERS: readonly string[];
  * // srv/external/lib/BusinessPartnerService.js
  * class BusinessPartnerService extends soap.Service {
  *     async init() {
- *         this.request('ProductSet', async (req) => ({
+ *         this.request('Products', async (req) => ({
  *             ProductID: req.data.ID,
  *         }));
- *         this.response('ProductSet', (req, rows) =>
+ *         this.response('Products', (req, rows) =>
  *             rows.map(r => ({ ...r, _source: 'soap' }))
  *         );
  *         await super.init();
@@ -371,7 +371,7 @@ export interface CsnEntityDefinition {
 }
 /**
  * Minimal structural shape of a CDS entity definition accepted by
- * {@link read} (for example `srv.entities.BusinessPartnerSet`).
+ * {@link read} (for example `srv.entities.BusinessPartners`).
  */
 export interface CdsEntityDef {
     name?: string;
@@ -416,7 +416,7 @@ export interface ReadOptions {
  * @example
  * const req = soap.createRequest({
  *     event: 'READ',
- *     query: SELECT.from('ext.BusinessPartnerSet'),
+ *     query: SELECT.from('ext.BusinessPartners'),
  *     headers: { 'accept-language': 'en' },
  *     user: inboundReq.user,
  * });

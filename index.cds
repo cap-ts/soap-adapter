@@ -1,4 +1,4 @@
-annotation Soap : Boolean default true;
+annotation Soap : Boolean;
 
 /**
  * Binds an entity to a concrete SOAP operation.

@@ -232,7 +232,7 @@ Details: [HTTP endpoints and query options](#-http-endpoints-and-query-options).
 | `@Soap.filterRestriction: { mandatoryFields, multipleSelection }` | entity | No | Fields `$filter` must contain (400 otherwise); `multipleSelection: false` = one SOAP call per key value. |
 | `@Soap.adapter: '<module>'` | service | No | Adapter module (a path relative to the project root, or a package), instead of `cds.requires.<Service>.impl` or the file convention. |
 
-All seven annotations (`@Soap` and the six `@Soap.*` below) are declared in the package's `index.cds` under the single canonical top-level namespace. `@Soap` (Boolean) only marks a service in the model; what makes a service SOAP-backed at runtime is `kind: "soap"` in `cds.requires`. They are real CDS typed annotations, so `cds compile` type-checks consumer usage — typos and shape mismatches surface at build time, not at first request.
+All seven annotations (`@Soap` and the six `@Soap.*` below) are declared in the package's `index.cds` under the single canonical top-level namespace. `using from '@cap-ts/soap-adapter';` imports them; the model still compiles to SQL, so an application with a database deploys as usual. `@Soap` (Boolean) only marks a service in the model; what makes a service SOAP-backed at runtime is `kind: "soap"` in `cds.requires`. They are real CDS typed annotations, so `cds compile` type-checks consumer usage — typos and shape mismatches surface at build time, not at first request.
 
 ### `@Soap.binding` *(struct, entity-level)*
 
@@ -278,7 +278,8 @@ entity BusinessPartner {
 }
 ```
 
-Without `@Soap.path`, the element's own name is used as the path (case-sensitive). `$value` wrappers and `item` / `Item` arrays are unwrapped along the way; a missing value becomes `null`. Only elements with a built-in `cds.*` type are mapped. `@Soap.path` is essential when SOAP responses nest values several levels deep or when element names differ from the response.
+Without `@Soap.path`, the element's own name is used as the path (case-sensitive). `$value` wrappers and `item` / `Item` arrays are unwrapped along the way; a missing value becomes `null`. Only elements with a built-in `cds.*` type are mapped; associations and compositions (for example one added with `extend` to join the SOAP entity to another service) are left out of the row. A value node-soap parsed into a date (`xsd:date`, `xsd:dateTime`, `xsd:time`) is formatted for
+the element's type: `Date` `2026-10-14`, `Time` `13:45:00`, `DateTime` `2026-10-14T13:45:00Z`, else the ISO timestamp. `@Soap.path` is essential when SOAP responses nest values several levels deep or when element names differ from the response.
 
 ### `@Soap.filterRestriction` *(struct, entity-level)*
 
@@ -302,13 +303,13 @@ See § [Filter push-down & `filterRestriction`](#-filter-push-down--filterrestri
 ### `@Soap.adapter` *(scalar, service-level)* — optional
 
 The module of the service's adapter class: a path relative to the project root (with or without `./`, without
-extension), or a package specifier resolved from the project root.
+extension: `<path>.ts` is taken before `<path>.js`), or a package specifier resolved from the project root.
 
 ```cds
 @Soap.adapter : '@my-org/bp-adapter'           // sibling package
 service BP { … }
 
-@Soap.adapter : 'srv/adapters/BusinessPartner' // <root>/srv/adapters/BusinessPartner.{js,ts}
+@Soap.adapter : 'srv/adapters/BusinessPartner' // <root>/srv/adapters/BusinessPartner.ts, else .js
 service BP2 { … }
 ```
 
@@ -381,6 +382,10 @@ module.exports = BP;
   run around the pipeline; an `on('READ', …)` handler runs instead of it unless it calls `next()`.
 - **CAP can construct it too.** The plugin registers `kind: 'soap'` with CAP (`cds.requires.kinds.soap`), so a
   `cds.connect.to('<Service>')` before the plugin started the service, or a mocked service under `cds watch`, works.
+- **CAP serves it as well.** A SOAP service of the model is also an OData service of the application
+  (`/odata/v4/<path>`). Reads there run the same pipeline, writes answer 405. When CAP served it with a class of its own
+  (the adapter class named by `@Soap.adapter` or `impl`, which CAP does not read), the plugin registers the adapter class
+  instead and CAP's endpoint hands every request to it.
 
 ### Service properties
 
@@ -430,7 +435,9 @@ this.header(BusinessPartner, () => ({
 - Return value: a plain map, or a structured `{ value, name?, prefix?, xmlns? }`. Returning `null` / `undefined` adds nothing.
 - In a plain map, keys on the forbidden list below are dropped (with a warning), so inbound credentials cannot be copied into the envelope by accident.
 - Without any `header()` hook the runtime adds one default SOAP header, `TraceID`, with the request's correlation id.
-- Called once per SOAP dispatch (including each fan-out call for `multipleSelection: false`).
+- Called once per SOAP dispatch (including each fan-out call for `multipleSelection: false`). Every hook of a dispatch
+  runs before its headers are set on the (shared) SOAP client and the call starts, so concurrent calls never mix their
+  headers.
 
 ### `this.request(entity, fn)` — outbound SOAP payload
 
@@ -878,7 +885,7 @@ GET /soap/fi/FinancialDocuments?$filter=FiscalYear eq '2025'
 
 | Value | `$filter` clause | Runtime behaviour |
 | ----- | ---------------- | ----------------- |
-| `false` | `BusinessPartnerID in ('BP001','BP002')` | Expands to 2 SOAP calls (one per value, run in parallel); results merged. |
+| `false` | `BusinessPartnerID in ('BP001','BP002')` | Expands to 2 SOAP calls (one per value, run in parallel, each in a transaction of its own); results merged, then `$orderby`, `$select`, `$top` / `$skip` (and the page cap) and `$count` apply to the merged rows. |
 | `false` | `BusinessPartnerID in ('BP001') or Name eq 'x'`, or two `in(…)` on the key | Rejected with HTTP 400 `UNSUPPORTED_MULTI_SELECTION_FILTER`. |
 | `false` | `BusinessPartnerID eq 'BP001'` | Single SOAP call. |
 | `true` / not set | any | Single SOAP call; the `request()` hook handles `in(…)` itself (or the in-memory evaluator filters the result). |
@@ -907,9 +914,9 @@ Responses are `application/json;odata.metadata=minimal`. Only GET is mounted; wr
 | --- | --- |
 | `$filter` | Parsed by a fail-closed parser into CQN: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `and`, `or`, `not`, `in (...)`, parentheses, string, number (also negative), ISO date-time, boolean and `null` literals, and the functions `startswith`, `endswith`, `contains`, `tolower`, `toupper`, `length`, `concat`, `substring`. Anything else (unknown characters or functions, a function on the left of a comparison, GUID literals, unterminated strings) is a 400, never ignored. `'It''s'` keeps the doubled quote. |
 | `$select` | Projection of the answer. |
-| `$orderby`, `$top`, `$skip` | Applied in memory unless the adapter pushed them down (`__filterPushedDown`). |
-| `$skiptoken` | Treated as `$skip` (so `@odata.nextLink` values work). |
-| `$count=true` | `@odata.count`: the total before paging. |
+| `$orderby`, `$top`, `$skip` | Applied in memory unless the adapter pushed them down (`__filterPushedDown`). Without `$top` the answer is cut to `cds.query.soap.pageSize` rows and `@odata.nextLink` continues the same query (`$filter`, `$orderby`, `$select`, `$count` repeated, `$skiptoken` advanced); a client `$top` up to the maximum page size (5000) is answered without a next link, one above it gets a link with the rest of its `$top`. |
+| `$skiptoken` | Treated as `$skip` (so `@odata.nextLink` values work); without `$top` the next page has the page size of `cds.query.soap.pageSize`, like the first. |
+| `$count=true` | `@odata.count`: the total before paging. The query the hooks and handlers see carries it (`req.query.SELECT.count`), so a `request()` hook can decide not to push the paging (see [`__filterPushedDown`](#__filterpusheddown-sentinel)). |
 | `$search` | Accepted and ignored. |
 | `$expand`, `$apply`, `$format`, any other `$` option | 400 `The system query option "<x>" is not supported by soap endpoint.` |
 
