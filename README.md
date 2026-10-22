@@ -54,7 +54,7 @@ npm install @cap-ts/soap-adapter
 
 The package registers itself as a CAP plugin via `cds-plugin` — no explicit `require()` is needed. `cds watch` and `cds build` pick it up automatically.
 
-### Peer requirements
+### Peer dependencies
 
 | Peer | Version | Notes |
 | --- | --- | --- |
@@ -63,8 +63,14 @@ The package registers itself as a CAP plugin via `cds-plugin` — no explicit `r
 | `@cap-js/cds-types` | >=0.18.0, optional | TypeScript types only; not needed to run the adapter. |
 | `@sap-cloud-sdk/http-client` | ^4.7.0 | Destination-based HTTP calls. |
 | `@sap-cloud-sdk/connectivity` | ^4.7.0 | Destination resolution and JWT forwarding. |
-| `soap` | ^1.10.0 | Dependency, installed automatically. |
-| `p-limit` | ^3.1.0 | Dependency, installed automatically. |
+
+### Installed automatically
+
+| Dependency | Version | Notes |
+| --- | --- | --- |
+| `soap` | ^1.10.0 | The WSDL client. |
+| `p-limit` | ^3.1.0 | Concurrency limits. |
+| `@sap-cloud-sdk/http-client`, `@sap-cloud-sdk/connectivity` | ^4.7.0 | Also declared as peers, so the application shares one copy. |
 
 Optional but recommended:
 
@@ -86,13 +92,13 @@ Optional but recommended:
 │  │ service BP {                                                     │  │
 │  │   @Soap.operation: 'GetBusinessPartner'                          │  │
 │  │   @Soap.binding: {                                               │  │
-|  |     rootRequest: 'GetBusinessPartnerRequest',                    │  │
+│  │     rootRequest: 'GetBusinessPartnerRequest',                    │  │
 │  │     rootResponse: 'GetBusinessPartnerResponse'                   │  │
-|  |   }                                                              │  │
-│  │   entity BusinessPartner {                                       |  |
-|  |     key BusinessPartnerID : String;                              |  |
-|  |     ...                                                          |  |
-|  |   };                                                             │  │
+│  │   }                                                              │  │
+│  │   entity BusinessPartner {                                       │  │
+│  │     key BusinessPartnerID : String;                              │  │
+│  │     ...                                                          │  │
+│  │   };                                                             │  │
 │  │ }                                                                │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
@@ -848,7 +854,7 @@ The adapter translates OData `$filter` expressions into SOAP request fields. Und
 
 Two paths are supported. **Prefer the opt-in path (A)** for any adapter that can express `$filter` / `$orderby` / `$top` / `$skip` in its SOAP operation's selection criteria — it avoids the in-memory evaluator entirely and lets the SOAP backend paginate.
 
-**Path A — Opt-in via `__filterPushedDown` sentinel (recommended, since 0.1.6).**
+**Path A — Opt-in via `__filterPushedDown` sentinel (recommended).**
 
 1. The CAP OData layer parses `$filter` into a CQN `WHERE` array.
 2. Your `request()` hook translates the CQN into the SOAP-native selection criteria and **returns the payload with `__filterPushedDown: true`** set on it (when `cds.env.query.soap.pushFilters !== false`).
@@ -1013,7 +1019,7 @@ cds.on('bootstrap', (app: any) => {
 }
 ```
 
-> ⚠️ The adapter does **not** bundle these packages. Consumers own the security posture of their HTTP surface; the adapter only guarantees that its own `/soap/**` handlers do not leak credentials, cache across tenants, or accept unsanitised filter input (see the guarantees table above).
+> ⚠️ The adapter does **not** depend on or install these packages. Consumers own the security posture of their HTTP surface; the adapter only guarantees that its own `/soap/**` handlers do not leak credentials, cache across tenants, or accept unsanitised filter input (see the guarantees table above).
 
 [↑ Table of Contents](#-table-of-contents)
 
