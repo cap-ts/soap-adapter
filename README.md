@@ -221,6 +221,18 @@ its short name in lower case:
   system query option is a 400). `@requires` on the service is enforced.
 - `/soap/bp/BusinessPartner/<key>` — a read by key (404 when nothing comes back).
 
+The same two routes are also mounted without the `/soap` prefix (`/bp/BusinessPartner`).
+
+**Internal service.** A SOAP service that is only read in-process (through a projection of another service, `srv.run`
+or `soap.read`) is annotated `@protocol: 'none'`, as for CAP's own protocol adapters: no route is mounted (404), and
+the boot line says `serving BP { at: [], internal, ... }`. In-process reads work as before, checked for the request's user ([Authentication](#-http-endpoints-and-query-options)).
+
+```cds
+@Soap
+@protocol: 'none'          // internal: in-process only, no /soap routes
+service BP @(path: 'bp') { ... }
+```
+
 Details: [HTTP endpoints and query options](#-http-endpoints-and-query-options).
 
 ---
@@ -956,6 +968,21 @@ Responses are `application/json;odata.metadata=minimal`. Only GET is mounted; wr
 
 Authentication: when the entity or service has `@requires` (other than `any`), the route runs CAP's auth middleware
 itself (the routes are mounted outside CAP's protocol adapters); no user is 401, a user without one of the roles is 403.
+A service with `@protocol: 'none'` has no routes (see [Internal service](#-quick-start-5-minutes)).
+
+Every other way in is checked the same way, for the user of the request, as CAP checks an `ApplicationService`
+(`BaseService.handle`): `srv.run` / `srv.read` in a handler, `cds.connect.to` at any time, `soap.read`, a `@remote`
+projection of `@cap-ts/remote-service-adapter` and the service's OData endpoint.
+
+| Annotation | Check |
+| --- | --- |
+| `@requires` of the service and of the entity | Both must pass: no user is 401, a user without one of the roles is 403; `any` passes everyone, `authenticated-user` every logged-in user. |
+| `@restrict` of the entity | The entries whose `grant` names the event (`*`, `READ`, `WRITE` for CREATE / UPDATE / DELETE; no `grant` is every event) and whose `to` names a role of the user (no `to` is everyone). None: 403 (401 for no user). A granted entry without `where`: no filter. Otherwise their `where` conditions, joined with `or`, are added to the WHERE of the read; `$user` / `$user.id` is the user's id, `$user.<attr>` its attribute (a missing one is `null`, so no row). |
+| A privileged user (`cds.User.privileged`, e.g. the warm-up of `@cap-ts/remote-service-adapter`) | Passes every check. |
+
+A projection in another service is checked for the user who calls that service: give such a user the roles of the
+SOAP service, or remove `@requires` from the SOAP service and protect the calling service. Close the SOAP service to
+HTTP with `@protocol: 'none'`.
 
 ---
 
@@ -989,7 +1016,8 @@ over SOAP entities in other services are served by `@cap-ts/remote-service-adapt
 | **JWT tenant isolation** | Destination resolution uses the subscriber JWT; a tenant cannot access another tenant's destination. |
 | **Filter injection prevention** | The filter extractor operates on the parsed CQN tree (not raw `$filter` string), so SQL/SOAP injection via `$filter` is structurally impossible. |
 | **No client sharing across tenants** | The SOAP client cache is keyed by service, destination name, endpoint URL and tenant. |
-| **`@requires` enforcement** | All routes mounted under `/soap/**` inherit the CAP `@requires` annotation from the service definition. Unauthenticated requests are rejected by the CAP runtime before reaching the adapter. |
+| **`@requires` enforcement** | All routes mounted under `/soap/**` inherit the CAP `@requires` annotation from the service definition. Unauthenticated requests are rejected by the CAP runtime before reaching the adapter. In-process reads (`srv.run`, `soap.read`, projections of other services) are checked for the request's user too, `@restrict` included (see Authentication in the HTTP section); a privileged user passes. |
+| **Internal services** | `@protocol: 'none'` on the service: no route is mounted, the service is read in-process only. |
 
 ### Middleware ordering for consumers
 
@@ -1066,6 +1094,7 @@ Error bodies are `{ "error": { "code", "message", "@Common.numericSeverity": 4 }
 | A second `in (...)` on the key, or `in` combined with `or`, on a `multipleSelection: false` entity | 400 `UNSUPPORTED_MULTI_SELECTION_FILTER` |
 | `@requires` set and no authenticated user / user without the role | 401 / 403 |
 | Read by key without a row | 404 `Entity instance not found.` |
+| Any route of a service with `@protocol: 'none'` | 404 (not mounted) |
 | CREATE / UPDATE / DELETE | 405 |
 | No adapter class found for the service | 501 `No adapter class for SOAP service "<Service>" (entity "<Entity>"): see the "[soap] no adapter class" warning in the startup log` |
 | A hook rejects with `req.reject(<status>, <message>)` | that status; the message for 4xx and 501, `SOAP integration call failed` for other 5xx |
