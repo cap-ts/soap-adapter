@@ -899,6 +899,15 @@ See [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel) for the full c
 entity FinancialDocuments { … }
 ```
 
+A read by key through CAP (`/odata/v4/<path>/<Entity>('<key>')`, `SELECT.from(Entity, key)`) carries its key in
+the FROM: the runtime joins it to the WHERE, so the hooks, the restriction and the in-memory filter see it as on the
+`/soap/<path>/<Entity>/<key>` route.
+
+The restriction applies to every READ of the entity, whatever its way in: the `/soap` routes, `srv.run(SELECT ...)`,
+`soap.read`, `soap.createRequest` with `dispatch`, the CAP-served OData endpoint and consumers such as
+`@cap-ts/remote-service-adapter`. It is checked before any `request()` hook or SOAP call (an entity with a `mock()` hook
+is not checked).
+
 **`mandatoryFields`** — array of OData property names that MUST be present in `$filter`. A request missing any mandatory field is rejected with HTTP 400 and a diagnostic message:
 
 ```http
@@ -910,7 +919,7 @@ GET /soap/fi/FinancialDocuments?$filter=FiscalYear eq '2025'
 
 | Value | `$filter` clause | Runtime behaviour |
 | ----- | ---------------- | ----------------- |
-| `false` | `BusinessPartnerID in ('BP001','BP002')` | Expands to 2 SOAP calls (one per value, run in parallel, each in a transaction of its own); results merged, then `$orderby`, `$select`, `$top` / `$skip` (and the page cap) and `$count` apply to the merged rows. |
+| `false` | `BusinessPartnerID in ('BP001','BP002')` | Expands to 2 SOAP calls (one per value, run in parallel, each in a transaction of its own); results merged, then `$orderby`, `$select`, `$top` / `$skip` (and the page cap) and `$count` apply to the merged rows. The same for an in-process `srv.run` or `soap.read` with a key list. |
 | `false` | `BusinessPartnerID in ('BP001') or Name eq 'x'`, or two `in(…)` on the key | Rejected with HTTP 400 `UNSUPPORTED_MULTI_SELECTION_FILTER`. |
 | `false` | `BusinessPartnerID eq 'BP001'` | Single SOAP call. |
 | `true` / not set | any | Single SOAP call; the `request()` hook handles `in(…)` itself (or the in-memory evaluator filters the result). |
@@ -937,7 +946,7 @@ Responses are `application/json;odata.metadata=minimal`. Only GET is mounted; wr
 
 | Query option | Behavior |
 | --- | --- |
-| `$filter` | Parsed by a fail-closed parser into CQN: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `and`, `or`, `not`, `in (...)`, parentheses, string, number (also negative), ISO date-time, boolean and `null` literals, and the functions `startswith`, `endswith`, `contains`, `tolower`, `toupper`, `length`, `concat`, `substring`. Anything else (unknown characters or functions, a function on the left of a comparison, GUID literals, unterminated strings) is a 400, never ignored. `'It''s'` keeps the doubled quote. |
+| `$filter` | Parsed by a fail-closed parser into CQN: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `and`, `or` (`and` binds tighter), `not`, `in (...)`, parentheses, string, number (also negative), boolean and `null` literals, unquoted date (`2026-10-14`), date-time (`2026-10-14T08:30:00Z`, with an offset compared as an instant), time-of-day and GUID literals, and the functions `startswith`, `endswith`, `contains`, `tolower`, `toupper`, `length`, `concat`, `substring` (zero-based), also on the left of a comparison (`tolower(Name) eq 'x'`). A function with a null argument is null, so its test is false. Anything else (unknown characters or functions, a literal on the left of a comparison, unterminated strings) is a 400, never ignored. `'It''s'` keeps the doubled quote. |
 | `$select` | Projection of the answer. |
 | `$orderby`, `$top`, `$skip` | Applied in memory unless the adapter pushed them down (`__filterPushedDown`). Without `$top` the answer is cut to `cds.query.soap.pageSize` rows and `@odata.nextLink` continues the same query (`$filter`, `$orderby`, `$select`, `$count` repeated, `$skiptoken` advanced); a client `$top` up to the maximum page size (5000) is answered without a next link, one above it gets a link with the rest of its `$top`. |
 | `$skiptoken` | Treated as `$skip` (so `@odata.nextLink` values work); without `$top` the next page has the page size of `cds.query.soap.pageSize`, like the first. |
