@@ -29,6 +29,7 @@
 📝 [CDS annotation reference (`@Soap.*`)](#-cds-annotation-reference-soap)\
 🌐 [HTTP endpoints and query options](#-http-endpoints-and-query-options)\
 🔗 [Using SOAP entities from other services](#-using-soap-entities-from-other-services)\
+🤖 [AI agents and MCP](#-ai-agents-and-mcp)\
 🔌 [Adapter class API (`soap.Service`)](#-adapter-class-api-soapservice)\
 🧰 [Utility API (`soap.*`)](#-utility-api-soap)\
 ⚙️ [Configuration (`cds.env.query.soap.*`)](#️-configuration-cdsenvquerysoap)\
@@ -358,6 +359,22 @@ When nothing is found, the service still starts, its READs answer `501`, and a w
 
 With `"strict": true` in `cds.requires.<Service>` (or `cds.env.features.strict`), a missing class stops the start
 instead, so a broken build is caught at deployment and not at the first request.
+
+---
+
+## 🤖 AI agents and MCP
+
+[↑ Table of Contents](#-table-of-contents)
+
+An AI agent reaches SOAP data the way every other client does: through a CAP service.
+
+| Topic | What applies |
+| --- | --- |
+| Serving over MCP | SAP's MCP plugin [`@cap-js/mcp`](https://cap.cloud.sap/docs/guides/protocols/mcp) serves application services only. A SOAP service (`soap.Service`, a `cds.Service`) is not served over MCP itself: expose its entities through a projection in a `@remote` service of `@cap-ts/remote-service-adapter`, annotated `@odata @mcp` (see "AI agents and MCP" in that package's README). The agent then gets the push-down to the operation and the settings of `cds.query.remote` for agents: request budget, audit line, error masking, hints. |
+| Hints in the docs | `cds.query.soap.agentHints: true` adds `SOAP hints: ...` to the doc of every entity with a filter restriction (`@Soap.filterRestriction`, or the one of `@Soap.binding`): its mandatory filter fields, on the entity and on each such element, and the one-value-per-call rule of `multipleSelection: false`. An MCP server's `describe` shows them, OData `$metadata` carries them as `Core.Description`. A `@remote` projection with `cds.query.remote.agentHints` names the same fields in its own element names. |
+| Errors | Always generic, no setting needed: a failed SOAP call is a 500 `SOAP integration call failed`; the detail is logged with secrets redacted. A 4xx such as `MISSING_MANDATORY_FILTER` keeps its message, so an agent can correct its query. |
+| Cost of a query | Every read is a real SOAP call. With `multipleSelection: false` a key `in (...)` list is one call per value; each one counts against the request budget of a `@remote` service above. |
+| The agent's user | The request's user and tenant are used for the destination (subscriber JWT); inbound headers are never forwarded. `@requires` / `@restrict` of the service an agent calls apply as for any request. |
 
 ---
 
@@ -748,6 +765,7 @@ Global runtime knobs live under `cds.env.query.soap` (the `cds.query.soap` key i
         "pageSize": 1000,
         "multiSelectionConcurrency": 5,
         "maxConcurrent": 50,
+        "agentHints": false,
         "idempotency": {
           "enabled": false,
           "ttlMs": 900000,
@@ -763,6 +781,7 @@ Global runtime knobs live under `cds.env.query.soap` (the `cds.query.soap` key i
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `query.soap.multiSelectionConcurrency` | `number` | `5` | Batch size for the fan-out of `multipleSelection: false` entities: that many SOAP calls run in parallel, batch after batch. |
+| `query.soap.agentHints` | `boolean` | `false` | Adds hints for agents and other clients to the docs of every entity with `@Soap.filterRestriction`: its mandatory filter fields (on the entity and on each such element) and the one-value-per-call rule of `multipleSelection: false`. An MCP server's `describe` shows them, OData `$metadata` carries them as `Core.Description`; your own doc comments are kept, the hints follow them. See [AI agents and MCP](#-ai-agents-and-mcp). |
 | `query.soap.maxConcurrent` | `number` | `50` | Reserved. A per-destination `p-limit` pool is prepared from it, but the request path does not use it yet. |
 | `query.soap.pushFilters` | `boolean` | `true` | Enables the [`__filterPushedDown` sentinel](#__filterpusheddown-sentinel). Set to `false` to force the in-memory `$filter` / `$orderby` / `$top` / `$skip` evaluator even when a `request()` hook sets the sentinel — useful for A/B testing or when a push-down implementation is suspected of misbehaving. |
 | `query.soap.pageSize` | `number` | `1000` | Default page size for the bounded in-memory fallback when the adapter does **not** set the `__filterPushedDown` sentinel (or when `pushFilters: false`). When the filtered result exceeds one page, the runtime emits an `@odata.nextLink` header and logs a one-time-per-service warning. Hard-capped at `5000` regardless of override. |
